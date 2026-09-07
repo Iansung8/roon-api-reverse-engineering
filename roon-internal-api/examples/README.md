@@ -25,3 +25,22 @@ examples. Their names and old comments do not establish current behavior.
 request it registers and dispatches `FavoriteOrBan`. Treat its outcome as historical evidence,
 not a supported or safe control workflow. Other `favorite-*`, `live-*`, `edit-*`, and
 `test-*` scripts may likewise send commands or make assumptions tied to one captured Core.
+
+## Read-only play-history export
+
+### `play-history.ts`
+**Status: WORKING** (validated live against a 2.71 Core with a 10,630-play
+history: a single-page run and a 150-play multi-page run — newest-first
+order, unique play identities, zero unresolvable skips)
+
+Exports the profile's play history, newest first, via
+`Library::VirtualHistoryQuery` + per-page `RetainPage`/`ReleasePage`,
+printing one JSON line per play (playedAt / artist / title / album /
+completionPct / roonTrackId). The header documents the HistoryPlay wire
+layout: `Time` is a .NET DateTime int64 (Kind bits + ticks), `HistoryPlayId`
+equals the raw ticks, `TrackBase` is an inline TrackLink carrying the stable
+TrackId.
+
+```bash
+npx ts-node examples/play-history.ts 50
+```
