@@ -40,9 +40,11 @@ jobs:
         run: |
           git ls-files --error-unmatch -- \
             roon-internal-api/src/generated/api.ts \
+            roon-internal-api/src/generated/struct-schemas.ts \
             roon-internal-api/docs/reflist-audit.md >/dev/null
           git diff --exit-code -- \
             roon-internal-api/src/generated/api.ts \
+            roon-internal-api/src/generated/struct-schemas.ts \
             roon-internal-api/docs/reflist-audit.md
 
       - name: Lint SDK
