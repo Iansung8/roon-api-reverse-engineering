@@ -37,8 +37,8 @@ setups. Treat everything as "worked for me."
   metadata and untested.
 - ✅ **Tried by hand** against one Core: read object graph, favorite, play (audio), pause,
   standby/power, a reversible metadata edit.
-- 🚧 **Open:** plenty. Most visibly, full *streaming-catalog* search (in-library search
-  half-works).
+- 🚧 **Open:** broader generated methods and streaming-catalog behavior still need validation.
+  Server-side UnifiedSearch and bounded play-history reads have working examples.
 
 ### Extension API vs internal protocol
 
@@ -105,7 +105,7 @@ captures/            packet captures used to work out the protocol
 
 Help welcome — see the
 [contributing guide](https://arthursoares.github.io/roon-api-reverse-engineering/contributing/).
-The best-scoped open task is search. Most contribution is **validation**: confirming
+Most contribution is **validation**: confirming
 generated methods against a live Core via captures, oracle goldens, or visible effects.
 
 ## ⚠️ Stability & safety — read this
