@@ -3,7 +3,8 @@ import { RemotingClient, Cmd, Transport } from './remoting';
 import { FrameParser, encodeResponse } from './frame';
 import { BinaryWriter } from './writer';
 import { BinaryReader } from './reader';
-import { RoonObject } from './objects';
+import { RoonObject, PropertyType } from './objects';
+import { LibraryApi, TransportApi } from '../generated/api';
 
 class MockTransport implements Transport {
   sent: Buffer[] = [];
@@ -65,6 +66,10 @@ function declaredTypes(t: MockTransport): Map<number, DeclaredType> {
     }));
     types.set(id, { name, members });
   }
+  // Remote IDs resolve a local type whose property mapping is shared.
+  const localMappings = new Map<string, DeclaredType>();
+  for (const type of types.values()) localMappings.set(type.name, type);
+  for (const [id, type] of types) types.set(id, localMappings.get(type.name)!);
   return types;
 }
 
@@ -89,7 +94,7 @@ function latestAlbumEdit(t: MockTransport): { memberName: string; value: BinaryR
 
   const libraryEdit = inlineValue(callBody);
   const libraryBody = libraryEdit.body;
-  expect(libraryBody.flexInt()).toBe(1); // LibraryEdit::Albums
+  expect(types.get(libraryEdit.typeId)!.members[libraryBody.flexInt() - 1].name).toContain('::Albums');
   const albumsBlob = new BinaryReader(libraryBody.bytes(libraryBody.integer()));
   expect(albumsBlob.flexInt()).toBe(1); // one AlbumEdit
 
@@ -218,4 +223,94 @@ describe('album edit struct schemas', () => {
     expect(editRating.body.boolean()).toBe(true);
     expect(editRating.body.integer()).toBe(5);
   });
+});
+
+
+describe('canonical struct schemas', () => {
+  test('receiver retains Genres -> Labels -> Genres across repeated edits', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    for (const name of ['Genres', 'Labels', 'Genres']) {
+      const pending = c.editAlbum(17n, name === 'Genres' ? { addGenres: ['Jazz'] } : { addLabels: ['ECM'] });
+      const decoded = latestAlbumEdit(t);
+      await completeLatestCall(t, pending);
+      expect(decoded.memberName).toContain(`::${name}`);
+    }
+    expect([...declaredTypes(t).values()].filter((x) => x.name.endsWith('.AlbumEdit'))).toHaveLength(1);
+  });
+
+  test.each([true, false])('generated and handwritten SearchParameters share a schema (generated first: %s)', async (generatedFirst) => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const api = new LibraryApi(c, 43n);
+    const generated = async () => {
+      const pending = api.unifiedSearch({ Terms: 'generated', MaxCount: 7 });
+      const call = t.sentFrames().filter((f) => f.cmd === Cmd.CALL).at(-1)!;
+      const r = new BinaryReader(call.body);
+      r.long(); r.flexInt();
+      const value = inlineValue(r);
+      const schema = declaredTypes(t).get(value.typeId)!;
+      expect(schema.members[value.body.flexInt() - 1].name).toBe('string Sooloos.Broker.Api.SearchParameters::Terms');
+      expect(value.body.string()).toBe('generated');
+      expect(schema.members[value.body.flexInt() - 1].name).toBe('int Sooloos.Broker.Api.SearchParameters::MaxCount');
+      expect(value.body.integer()).toBe(7);
+      expect(value.body.flexInt()).toBe(0);
+      await completeLatestCall(t, pending);
+    };
+    const handwritten = async () => { await completeLatestCall(t, c.search('handwritten', 5)); };
+    await (generatedFirst ? generated() : handwritten());
+    await (generatedFirst ? handwritten() : generated());
+    const schemas = [...declaredTypes(t).values()];
+    expect(schemas).toHaveLength(1);
+    expect(schemas[0].members).toHaveLength(8);
+    expect(schemas[0].members[1].name).toBe('string Sooloos.Broker.Api.SearchParameters::Terms');
+  });
+
+  test('empty and reordered fields use the same schema and stable indexes', () => {
+    const { c, t } = buildClient();
+    const type = 'Sooloos.Broker.Api.SearchParameters';
+    const empty = inlineValue(new BinaryReader(c.structArg(type, [])));
+    expect(empty.body.flexInt()).toBe(0);
+    const populated = inlineValue(new BinaryReader(c.structArg(type, [
+      { name: 'MaxCount', propType: PropertyType.Int, value: new BinaryWriter().integer(9).toBuffer() },
+      { name: `string ${type}::Terms`, propType: PropertyType.String, value: new BinaryWriter().string('query').toBuffer() },
+    ])));
+    expect(populated.typeId).toBe(empty.typeId);
+    expect(populated.body.flexInt()).toBe(3);
+    expect(populated.body.integer()).toBe(9);
+    expect(populated.body.flexInt()).toBe(2);
+    expect(populated.body.string()).toBe('query');
+    expect(declaredTypes(t).size).toBe(1);
+  });
+});
+
+
+test('default handwritten PlayParameters can precede a populated generated call', async () => {
+  const { c, t } = buildClient();
+  seedCore(c);
+  seed(c, 80n, 'Sooloos.Broker.Api.Transport');
+  await completeLatestCall(t, c.playAlbum(90n, 91n));
+  await completeLatestCall(t, new TransportApi(c, 80n).playAlbum(90n, PROFILE_ID, { Shuffle: true }, 91n, false, false));
+  const types = [...declaredTypes(t).values()].filter((x) => x.name.endsWith('.PlayParameters'));
+  expect(types).toHaveLength(1);
+  expect(types[0].members).toHaveLength(5);
+});
+
+test('known structs reject unknown, duplicate and wrong-typed fields before sending', () => {
+  const { c, t } = buildClient();
+  const field = { name: 'Terms', propType: PropertyType.String, value: new BinaryWriter().string('term').toBuffer() };
+  const type = 'Sooloos.Broker.Api.SearchParameters';
+  expect(() => c.structArg(type, [{ ...field, name: 'Typo' }])).toThrow(/unknown member/);
+  expect(() => c.structArg(type, [field, { ...field, name: `string ${type}::Terms` }])).toThrow(/duplicate member/);
+  expect(() => c.structArg(type, [{ ...field, propType: PropertyType.Int }])).toThrow(/property type mismatch/);
+  expect(t.sent).toHaveLength(0);
+});
+
+test('unknown types allow an immutable explicit schema and fail incompatible reuse', () => {
+  const { c, t } = buildClient();
+  const field = { name: 'int Vendor.Unknown::Count', propType: PropertyType.Int, value: new BinaryWriter().integer(3).toBuffer() };
+  const first = c.structArg('Vendor.Unknown', [field]);
+  expect(c.structArg('Vendor.Unknown', [field])).toEqual(first);
+  expect(() => c.structArg('Vendor.Unknown', [])).toThrow(/incompatible schema/);
+  expect(declaredTypes(t).size).toBe(1);
 });

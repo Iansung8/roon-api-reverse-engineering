@@ -16,7 +16,8 @@ import { RoonConnection } from './connection';
 import { RemotingClient, CallResult } from './remoting';
 import { ObjectGraph, RoonObject, isRef, PropertyType } from './objects';
 import { formatMethodSignature, CatalogParam } from '../catalog/signature';
-import { Arg, buildArgs, inlineStruct } from './serializer';
+import { Arg, buildArgs } from './serializer';
+import { structArg } from './structs';
 import { BinaryWriter } from './writer';
 import { BinaryReader } from './reader';
 import { readFlexLong } from './flex';
@@ -145,20 +146,9 @@ export class RoonClient {
     return this.remoting.callMethod(objectId ?? this.serviceOid(service), sig, args);
   }
 
-  /**
-   * Build a populated by-value struct argument: declare the given members
-   * (cmd 5 DEFTYPE, indices 1..N in order) and serialize them as an inline
-   * value object. Remoting assigns a stable type id to each ordered schema.
-   */
+  /** Build a sparse value using the shared full schema and stable field indexes. */
   structArg(typeName: string, fields: StructField[]): Buffer {
-    const typeId = this.remoting.defineType(
-      typeName,
-      fields.map((f) => ({ name: f.name, propType: f.propType }))
-    );
-    return inlineStruct(
-      typeId,
-      fields.map((f, i) => ({ index: i + 1, value: f.value }))
-    );
+    return structArg(this.remoting, typeName, fields);
   }
 
   /** ms to wait for UnifiedSearch result objects to stream into the graph. */
@@ -347,10 +337,9 @@ export class RoonClient {
 
   /** Play an album on a zone (default PlayParameters). */
   async playAlbum(zoneOid: bigint, albumOid: bigint): Promise<CallResult> {
-    const ppTypeId = this.remoting.defineType('Sooloos.Broker.Api.PlayParameters', []);
     const args = Buffer.concat([
       buildArgs([Arg.ref(zoneOid), Arg.sooid(this.profile())]),
-      inlineStruct(ppTypeId),
+      this.structArg('Sooloos.Broker.Api.PlayParameters', []),
       buildArgs([Arg.ref(albumOid), Arg.bool(false), Arg.bool(false)]),
     ]);
     return this.call(
@@ -372,10 +361,9 @@ export class RoonClient {
 
   /** Play a single track on a zone (default PlayParameters). */
   async playTrack(zoneOid: bigint, trackOid: bigint): Promise<CallResult> {
-    const ppTypeId = this.remoting.defineType('Sooloos.Broker.Api.PlayParameters', []);
     const args = Buffer.concat([
       buildArgs([Arg.ref(zoneOid), Arg.sooid(this.profile())]),
-      inlineStruct(ppTypeId),
+      this.structArg('Sooloos.Broker.Api.PlayParameters', []),
       buildArgs([Arg.ref(trackOid)]),
     ]);
     return this.call(
