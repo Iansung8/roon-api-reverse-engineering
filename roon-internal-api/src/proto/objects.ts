@@ -37,7 +37,7 @@ export function isRef(v: unknown): v is ObjRef {
   return typeof v === 'object' && v !== null && '$ref' in (v as object);
 }
 
-/** Collection types serialize `count` inline items after their sparse header. */
+/** Collection types supported by the object stream decoder. */
 export function isCollectionType(typeName: string): boolean {
   return /(^|\.)(DataList|Query|VirtualQuery)</.test(typeName) || /\.Query$/.test(typeName);
 }
@@ -86,8 +86,39 @@ export class ObjectGraph {
     const typeName = def?.name ?? `#${typeId}`;
     const fields: Record<string, unknown> = {};
     if (populate && def) {
-      if (isCollectionType(typeName)) {
-        // Collection (DataList<T>/Query<T>): a built-in count property at
+      const dataList = /(?:^|\.)DataList<(.+)>$/.exec(typeName);
+      if (dataList) {
+        // Generated DataList<T>_Proxy.Populate reads count directly, then T
+        // values; it replaces the backing list on BOTH PUSHOBJ and UPDATEOBJ.
+        // Query<T>'s sparse (1,count,0) header below is a different codec.
+        const primitives: Record<string, PropertyType> = {
+          string: PropertyType.String, int: PropertyType.Int, long: PropertyType.Long,
+          double: PropertyType.Double, float: PropertyType.Float, 'System.DateTime': PropertyType.DateTime,
+        };
+        // These DataList enum adapters use ReadInteger in the installed API.
+        const integerEnums = ['DsdStrategy', 'MediaSource', 'TidalStreamFormat',
+          'QobuzStreamFormat', 'KKBoxStreamFormat', 'NugsStreamFormat'];
+        const elementType = dataList[1];
+        const elementCodec = primitives[elementType] ??
+          (integerEnums.some((name) => elementType === `Sooloos.Broker.Api.${name}` ||
+            elementType === `Roon.Broker.Api.${name}`) ? PropertyType.Int : PropertyType.Object);
+        const count = r.integer();
+        const items: unknown[] = [];
+        for (let i = 0; i < count && r.remaining > 0; i++) {
+          try {
+            const item = this.readValue(r, elementCodec);
+            if (r.remaining < 0) break; // Do not invent a ref from a truncated varint.
+            items.push(item);
+          } catch {
+            break;
+          }
+        }
+        // Preserve an incomplete count so callers cannot mistake truncation for
+        // a complete empty result. A later full UPDATEOBJ can replace it.
+        fields.$count = r.pos > r.buf.length && items.length === count ? -1 : count;
+        fields.$items = items;
+      } else if (isCollectionType(typeName)) {
+        // Query<T>: a built-in count property at
         // wire-index 1 (DEFTYPE declares no members), 0 terminates, then
         // `count` items (each via the Object/GetObject encoding).
         let count = 0;
@@ -128,8 +159,9 @@ export class ObjectGraph {
     }
     const key = oid.toString();
     const existing = this.objects.get(key);
-    if (existing && populate) {
-      Object.assign(existing.fields, fields);
+    if (existing) {
+      // PUSHSTUB adds a reference; it does not erase an already loaded object.
+      if (populate) Object.assign(existing.fields, fields);
     } else {
       this.objects.set(key, { oid, typeId, typeName, fields });
     }

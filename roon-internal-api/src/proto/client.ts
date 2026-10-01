@@ -155,22 +155,10 @@ export class RoonClient {
   private searchSettleMs = 2000;
 
   /**
-   * Library::UnifiedSearch — library AND streaming-catalog results.
-   *
-   * Three fixes over the first cut, all from a capture diff against the
-   * official client's search:
-   * - SearchParameters members are declared with their FULL wire names
-   *   ("string Sooloos.Broker.Api.SearchParameters::Terms", …). The server
-   *   matches DEFTYPE members by name and silently DROPS unknown ones, so the
-   *   short names meant every parameter (terms included) was discarded — the
-   *   search ran empty and returned nothing.
-   * - The profile id comes from the graph (see profile()) instead of a
-   *   hardcoded Sooid that only ever existed on one Core.
-   * - Results are the objects the server pushes in response (graph diff), not
-   *   a title-substring scan of the whole graph: the server's matches don't
-   *   necessarily contain the terms in their title ("beatles abbey" → "Abbey
-   *   Road"), and a whole-graph scan resurfaces stale hits from earlier
-   *   searches.
+   * Library::UnifiedSearch — library and streaming-catalog results.
+   * Resolve only the callback's result graph. TopSearchResults keep the Core's
+   * ranking, followed by highlighted albums and category lists in a stable
+   * order. Version lists preserve their order; repeated OIDs appear once.
    */
   async search(terms: string, maxCount = 50): Promise<RoonObject[]> {
     const params = this.structArg('Sooloos.Broker.Api.SearchParameters', [
@@ -195,7 +183,6 @@ export class RoonClient {
         value: new BinaryWriter().integer(20).toBuffer(),
       },
     ]);
-    const before = new Set(this.graph.objects.keys());
     const res = await this.call(
       'Library',
       'UnifiedSearch',
@@ -207,16 +194,83 @@ export class RoonClient {
       this.serviceOid('Library')
     );
     if (!res.success) throw new Error(`UnifiedSearch failed: ${res.status}`);
-    await new Promise((r) => setTimeout(r, this.searchSettleMs)); // results stream in
-    const wanted = ['AlbumLite', 'TrackLite', 'PerformerLite', 'WorkLite'];
-    const out: RoonObject[] = [];
-    for (const [k, o] of this.graph.objects) {
-      if (before.has(k)) continue;
-      if (!wanted.some((w) => o.typeName.endsWith(w))) continue;
-      out.push(o);
-      if (out.length >= maxCount) break;
+    const result = this.graph.decodeReturnValue(Uint8Array.from(res.payload));
+    const [, end] = readFlexLong(res.payload, 0);
+    if (!isRef(result) || end !== res.payload.length || res.payload.length > 10) {
+      throw new Error('UnifiedSearch returned an invalid result reference');
     }
-    return out;
+    const deadline = Date.now() + this.searchSettleMs;
+    for (;;) {
+      const objects = this.searchResultObjects(result.$ref);
+      if (objects !== undefined) return objects.slice(0, Math.max(0, maxCount));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('UnifiedSearch result graph is incomplete');
+      await new Promise((resolve) => setTimeout(resolve, Math.min(10, remaining)));
+    }
+  }
+
+  /** undefined means a referenced membership object has not arrived yet. */
+  private searchResultObjects(rootId: bigint): RoonObject[] | undefined {
+    const root = this.graph.getObject(rootId);
+    if (!root) return undefined;
+    if (!root.typeName.endsWith('.UnifiedSearchResults')) {
+      throw new Error('UnifiedSearch returned an unexpected result type');
+    }
+    const rootMembers = ['TopSearchResults', 'TopAlbum', 'TopLibraryAlbum',
+      'Performers', 'Composers', 'Albums', 'Tracks', 'Works'];
+    const leaves = new Set(['AlbumLite', 'TrackLite', 'PerformerLite', 'WorkLite']);
+    const seen = new Set<bigint>();
+    const out: RoonObject[] = [];
+    let complete = true;
+    const member = (fields: Record<string, unknown>, name: string): unknown =>
+      Object.entries(fields).find(([key]) => key.endsWith(`::${name}`))?.[1];
+    const visit = (value: unknown): void => {
+      if (value === null || value === undefined) return;
+      let type: string;
+      let fields: Record<string, unknown>;
+      if (isRef(value)) {
+        if (seen.has(value.$ref)) return;
+        seen.add(value.$ref);
+        const object = this.graph.getObject(value.$ref);
+        if (!object) { complete = false; return; }
+        type = object.typeName;
+        fields = object.fields;
+        if (leaves.has(type.slice(type.lastIndexOf('.') + 1))) {
+          out.push(object);
+          return; // An album's metadata references are not search membership.
+        }
+      } else if (typeof value === 'object' && '$type' in value) {
+        fields = value as Record<string, unknown>;
+        type = String(fields.$type);
+      } else {
+        complete = false;
+        return;
+      }
+      if (/(^|\.)DataList</.test(type)) {
+        const items = fields.$items;
+        if (!Array.isArray(items) || !Number.isInteger(fields.$count) ||
+            (fields.$count as number) < 0 || items.length !== fields.$count) {
+          complete = false;
+          return;
+        }
+        for (const item of items) visit(item);
+      } else if (type.endsWith('.AlbumLiteVersions') || type.endsWith('.TrackLiteVersions')) {
+        const items = member(fields, type.endsWith('.AlbumLiteVersions') ? 'Albums' : 'Tracks');
+        if (items === undefined) complete = false;
+        else visit(items);
+      } else if (type.endsWith('.TopSearchResult')) {
+        for (const name of ['Artist', 'Album', 'Track', 'Work',
+          'LibraryArtist', 'LibraryAlbum', 'LibraryTrack', 'LibraryWork']) visit(member(fields, name));
+      } else {
+        complete = false; // A known membership edge must resolve to a supported type.
+      }
+    };
+    // A PUSHSTUB carries only identity; await the populated result object.
+    if (!Object.keys(root.fields).some((key) => rootMembers.some((name) => key.endsWith(`::${name}`)))) {
+      return undefined;
+    }
+    for (const name of rootMembers) visit(member(root.fields, name));
+    return complete ? out : undefined;
   }
 
   /** Best-effort display title for a result object. */

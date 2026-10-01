@@ -130,52 +130,151 @@ describe('profile resolution', () => {
   });
 });
 
+function searchRoot(c: RoonClient, rootId: bigint, ids: bigint[]) {
+  seed(c, rootId, 'Sooloos.Broker.Api.UnifiedSearchResults', {
+    'Sooloos.Broker.Api.UnifiedSearchResults::Performers': { $ref: rootId + 1n },
+  });
+  seed(c, rootId + 1n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerLite>', {
+    $count: ids.length, $items: ids.map(($ref) => ({ $ref })),
+  });
+}
+
+function respondSearch(t: MockTransport, rootId: bigint) {
+  const call = t.sentFrames().filter((f) => f.cmd === Cmd.CALL).at(-1)!;
+  t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('Success').long(rootId).toBuffer(), true));
+}
+
 describe('UnifiedSearch', () => {
   test('declares SearchParameters members by their FULL wire names', async () => {
     const { c, t } = buildClient();
     seedCore(c);
-
+    searchRoot(c, 100n, []);
     const p = c.search('abbey road', 10);
-    const call = t.sentFrames().find((f) => f.cmd === Cmd.CALL)!;
-    t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('').toBuffer(), true));
+    respondSearch(t, 100n);
     await p;
-
-    const deftypes = t
-      .sentFrames()
-      .filter((f) => f.cmd === Cmd.DEFTYPE)
-      .map((f) => f.body.toString('utf8'))
-      .join('\n');
-    // The server matches DEFTYPE members by name and silently drops unknown
-    // ones — short names ("Terms") make it discard every parameter.
+    const deftypes = t.sentFrames().filter((f) => f.cmd === Cmd.DEFTYPE)
+      .map((f) => f.body.toString('utf8')).join('\n');
     expect(deftypes).toContain('System.Sooid Sooloos.Broker.Api.SearchParameters::ProfileId');
     expect(deftypes).toContain('string Sooloos.Broker.Api.SearchParameters::Terms');
     expect(deftypes).toContain('int Sooloos.Broker.Api.SearchParameters::MaxCount');
     expect(deftypes).toContain('int Sooloos.Broker.Api.SearchParameters::MaxTopResultCount');
   });
 
-  test('returns the objects pushed after the call, not stale graph matches', async () => {
+  test('repeated queries return existing identities in membership order, excluding unrelated pushes', async () => {
     const { c, t } = buildClient();
     seedCore(c);
-    // A result from some earlier search, already sitting in the graph — and
-    // one whose title happens to contain the terms. Neither may come back.
-    seed(c, 900n, 'Sooloos.Broker.Api.AlbumLite', {
-      'Sooloos.Broker.Api.AlbumLite::Title': 'Abbey Road (stale)',
-    });
+    seed(c, 901n, 'Sooloos.Broker.Api.PerformerLite');
+    seed(c, 902n, 'Sooloos.Broker.Api.PerformerLite');
+    searchRoot(c, 100n, [902n, 901n, 902n]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const p = c.search('query', 10);
+      seed(c, BigInt(950 + attempt), 'Sooloos.Broker.Api.AlbumLite');
+      respondSearch(t, 100n);
+      expect((await p).map((o) => o.oid)).toEqual([902n, 901n]);
+    }
+  });
 
-    const p = c.search('abbey road', 10);
-    const call = t.sentFrames().find((f) => f.cmd === Cmd.CALL)!;
-    t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('').toBuffer(), true));
-    // Server pushes fresh results while we settle; the title need not contain
-    // the search terms ("beatles abbey" would push "Abbey Road" too).
-    seed(c, 901n, 'Sooloos.Broker.Api.AlbumLite', {
-      'Sooloos.Broker.Api.AlbumLite::Title': 'Abbey Road',
-    });
-    seed(c, 902n, 'Sooloos.Broker.Api.TrackLite', {
-      'Sooloos.Broker.Api.TrackLite::Title': 'Come Together',
-    });
+  test('different callback roots share cached entities without leaking previous membership', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    for (const oid of [901n, 902n, 903n]) seed(c, oid, 'Sooloos.Broker.Api.PerformerLite');
+    searchRoot(c, 100n, [901n, 902n]);
+    searchRoot(c, 200n, [903n, 901n]);
+    const first = c.search('first', 10);
+    respondSearch(t, 100n);
+    expect((await first).map((o) => o.oid)).toEqual([901n, 902n]);
+    const second = c.search('second', 10);
+    respondSearch(t, 200n);
+    expect((await second).map((o) => o.oid)).toEqual([903n, 901n]);
+  });
 
-    const out = await p;
-    expect(out.map((o) => o.oid).sort()).toEqual([901n, 902n]);
+  test('top results and version containers preserve ordering and stop at result entities', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    seed(c, 901n, 'Sooloos.Broker.Api.AlbumLite', { 'AlbumLite::Artist': { $ref: 999n } });
+    seed(c, 902n, 'Sooloos.Broker.Api.AlbumLite');
+    seed(c, 999n, 'Sooloos.Broker.Api.PerformerLite');
+    seed(c, 100n, 'Sooloos.Broker.Api.UnifiedSearchResults', {
+      'UnifiedSearchResults::TopSearchResults': { $ref: 101n },
+      'UnifiedSearchResults::TopAlbum': { $ref: 102n },
+    });
+    seed(c, 101n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TopSearchResult>', {
+      $count: 1, $items: [{ $type: 'Sooloos.Broker.Api.TopSearchResult',
+        'TopSearchResult::Album': { $ref: 902n } }],
+    });
+    seed(c, 102n, 'Sooloos.Broker.Api.AlbumLiteVersions', { 'AlbumLiteVersions::Albums': { $ref: 103n } });
+    seed(c, 103n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>', {
+      $count: 2, $items: [{ $ref: 902n }, { $ref: 901n }],
+    });
+    const p = c.search('query', 10);
+    respondSearch(t, 100n);
+    expect((await p).map((o) => o.oid)).toEqual([902n, 901n]);
+    const limited = c.search('query', 1);
+    respondSearch(t, 100n);
+    expect((await limited).map((o) => o.oid)).toEqual([902n]);
+  });
+
+  test('waits for only the returned membership graph when objects arrive after the callback', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.search('query', 10);
+    respondSearch(t, 100n);
+    setTimeout(() => {
+      searchRoot(c, 100n, [901n]);
+      seed(c, 901n, 'Sooloos.Broker.Api.PerformerLite');
+    }, 5);
+    expect((await p).map((o) => o.oid)).toEqual([901n]);
+  });
+
+  test('incomplete memberships fail instead of silently returning empty or partial results', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    searchRoot(c, 100n, [901n]);
+    const p = c.search('query', 10);
+    respondSearch(t, 100n);
+    await expect(p).rejects.toThrow(/incomplete/i);
+  });
+
+  test('a missing collection item waits for the full list update, not unrelated graph traffic', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    searchRoot(c, 100n, [901n, 902n]);
+    seed(c, 901n, 'Sooloos.Broker.Api.PerformerLite');
+    seed(c, 902n, 'Sooloos.Broker.Api.PerformerLite');
+    c.graph.getObject(101n)!.fields.$items = [{ $ref: 901n }];
+    const p = c.search('query', 10);
+    respondSearch(t, 100n);
+    setTimeout(() => {
+      seed(c, 999n, 'Sooloos.Broker.Api.AlbumLite');
+      c.graph.getObject(101n)!.fields.$items = [{ $ref: 902n }, { $ref: 901n }];
+    }, 5);
+    expect((await p).map((o) => o.oid)).toEqual([902n, 901n]);
+  });
+
+  test('overlapping queries use their own callback roots even when responses arrive out of order', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    seed(c, 901n, 'Sooloos.Broker.Api.PerformerLite');
+    seed(c, 902n, 'Sooloos.Broker.Api.PerformerLite');
+    searchRoot(c, 100n, [901n, 902n]);
+    searchRoot(c, 200n, [902n]);
+    const first = c.search('first', 10);
+    const firstCall = t.sentFrames().filter((f) => f.cmd === Cmd.CALL).at(-1)!;
+    const second = c.search('second', 10);
+    respondSearch(t, 200n);
+    t.deliver(encodeResponse(firstCall.rid!, new BinaryWriter().string('Success').long(100n).toBuffer(), true));
+    expect((await first).map((o) => o.oid)).toEqual([901n, 902n]);
+    expect((await second).map((o) => o.oid)).toEqual([902n]);
+  });
+
+  test('a complete empty result stays empty despite unrelated pushes', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    searchRoot(c, 100n, []);
+    const p = c.search('query', 10);
+    seed(c, 901n, 'Sooloos.Broker.Api.AlbumLite');
+    respondSearch(t, 100n);
+    expect(await p).toEqual([]);
   });
 
   test('a failed call surfaces as an error instead of an empty result', async () => {
@@ -185,6 +284,15 @@ describe('UnifiedSearch', () => {
     const call = t.sentFrames().find((f) => f.cmd === Cmd.CALL)!;
     t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('Exception').toBuffer(), true));
     await expect(p).rejects.toThrow(/UnifiedSearch failed/);
+  });
+
+  test('a success without a result reference is an invalid response', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.search('anything', 10);
+    const call = t.sentFrames().find((f) => f.cmd === Cmd.CALL)!;
+    t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('Success').toBuffer(), true));
+    await expect(p).rejects.toThrow(/result reference/i);
   });
 });
 
@@ -257,7 +365,12 @@ describe('canonical struct schemas', () => {
       expect(value.body.flexInt()).toBe(0);
       await completeLatestCall(t, pending);
     };
-    const handwritten = async () => { await completeLatestCall(t, c.search('handwritten', 5)); };
+    const handwritten = async () => {
+      searchRoot(c, 100n, []);
+      const pending = c.search('handwritten', 5);
+      respondSearch(t, 100n);
+      await pending;
+    };
     await (generatedFirst ? generated() : handwritten());
     await (generatedFirst ? handwritten() : generated());
     const schemas = [...declaredTypes(t).values()];

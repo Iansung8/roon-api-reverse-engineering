@@ -1,0 +1,149 @@
+{
+  "provenance": "Roon Core 2.73 build 1696; read-only UnifiedSearch response, 2026-10-01. Selected complete PUSHOBJ frames from the live capture. All OIDs and type IDs replaced consistently with fixture-owned IDs of identical encoded widths; counts, order, member indexes, and other bytes unchanged. No titles or user metadata.",
+  "frames": [
+    {
+      "sourceFrame": 9,
+      "cmd": 3,
+      "type": "Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>",
+      "typeId": 128,
+      "oid": 32768,
+      "members": [],
+      "bodyHex": "828000810001828001",
+      "refs": [
+        32769
+      ]
+    },
+    {
+      "sourceFrame": 10,
+      "cmd": 3,
+      "type": "Sooloos.Broker.Api.AlbumLiteVersions",
+      "typeId": 129,
+      "oid": 32770,
+      "members": [
+        {
+          "name": "Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite> Sooloos.Broker.Api.AlbumLiteVersions::Albums",
+          "propType": 23
+        }
+      ],
+      "bodyHex": "82800281010182800000",
+      "refs": [
+        32768
+      ]
+    },
+    {
+      "sourceFrame": 11,
+      "cmd": 3,
+      "type": "Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TopSearchResult>",
+      "typeId": 130,
+      "oid": 32771,
+      "members": [],
+      "bodyHex": "828003810200",
+      "refs": []
+    },
+    {
+      "sourceFrame": 30,
+      "cmd": 3,
+      "type": "Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerLite>",
+      "typeId": 131,
+      "oid": 32772,
+      "members": [],
+      "bodyHex": "82800481033982800582800682800782800882800982800a82800b82800c82800d82800e82800f82801082801182801282801382801482801582801682801782801882801982801a82801b82801c82801d82801e82801f82802082802182802282802382802482802582802682802782802882802982802a82802b82802c82802d82802e82802f82803082803182803282803382803482803582803682803782803882803982803a82803b82803c82803d",
+      "refs": [
+        32773,
+        32774,
+        32775,
+        32776,
+        32777,
+        32778,
+        32779,
+        32780,
+        32781,
+        32782,
+        32783,
+        32784,
+        32785,
+        32786,
+        32787,
+        32788,
+        32789,
+        32790,
+        32791,
+        32792,
+        32793,
+        32794,
+        32795,
+        32796,
+        32797,
+        32798,
+        32799,
+        32800,
+        32801,
+        32802,
+        32803,
+        32804,
+        32805,
+        32806,
+        32807,
+        32808,
+        32809,
+        32810,
+        32811,
+        32812,
+        32813,
+        32814,
+        32815,
+        32816,
+        32817,
+        32818,
+        32819,
+        32820,
+        32821,
+        32822,
+        32823,
+        32824,
+        32825,
+        32826,
+        32827,
+        32828,
+        32829
+      ]
+    },
+    {
+      "sourceFrame": 31,
+      "cmd": 3,
+      "type": "Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerLite>",
+      "typeId": 131,
+      "oid": 32830,
+      "members": [],
+      "bodyHex": "82803e81031582800582803f82801582802082804082800a828041828042828043828044828045828046828047828032828033828034828035828036828037828039828038",
+      "refs": [
+        32773,
+        32831,
+        32789,
+        32800,
+        32832,
+        32778,
+        32833,
+        32834,
+        32835,
+        32836,
+        32837,
+        32838,
+        32839,
+        32818,
+        32819,
+        32820,
+        32821,
+        32822,
+        32823,
+        32825,
+        32824
+      ]
+    }
+  ],
+  "decoderEvidence": [
+    "Roon.Broker.Api.Remote.dll (.xamarin/osx-arm64), DataList<AlbumLite>_Proxy.Populate token 0x06001EBB: ReadInteger count, then count GetObject calls; full backing-list replacement.",
+    "DataList<TopSearchResult>_Proxy.Populate token 0x06001F2B uses the same direct count and GetObject codec.",
+    "Roon.Broker.Api.dll RemoteQueryProxy<T>.Populate token 0x06000DB5 instead reads sparse property mapping and terminator before items."
+  ]
+}
