@@ -39,3 +39,6 @@ roon-internal-api/oracle/bin/
 .playwright-mcp/
 shot-*.png
 roon-web-*.png
+
+# Generated from root CHANGELOG.md when Astro loads its configuration.
+site/src/content/docs/releases.md

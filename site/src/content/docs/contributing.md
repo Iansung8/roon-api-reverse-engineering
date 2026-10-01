@@ -8,7 +8,7 @@ sidebar:
 This is a hobby reverse-engineering experiment, and help is very welcome — especially from
 other Roon users who've wanted a more capable API for years. Most of what's left isn't deep
 protocol work; it's **breadth and validation**: confirming generated methods against a real
-Core, and cracking the one subsystem that's still fuzzy (streaming-catalog search).
+Core, broader streaming-provider behavior, and compatibility across Core versions.
 
 ## How it was built
 
@@ -16,6 +16,9 @@ Worth being upfront: most of this project — the protocol decoding, the TypeScr
 codegen, and these docs — was done by pair-programming with Claude (Anthropic's Claude Code).
 If you contribute, you're welcome to work the same way; a lot of the grind (decoding
 captures, generating wrappers) suits an agent well.
+
+Recent maintenance and adversarial review were performed with Codex. See
+[Releases](/releases/) for contributor credit and the evidence behind v0.1.1.
 
 ## Project layout
 
@@ -37,7 +40,7 @@ roon-api-reverse-engineering/
 ## Prerequisites
 
 - A **Roon Core** on your network and the **desktop client** (for capturing).
-- **Node 18+** (developed on 22).
+- **Node 22** for the repository checks (the version used by CI); the SDK requires Node 18+.
 - `tcpdump` + `tshark` (Wireshark CLI) for captures.
 - For regenerating the catalog: a **.NET SDK** and `ilspycmd` (decompile + the oracle).
 
@@ -57,6 +60,12 @@ You need two values (neither is a secret — there's no local auth):
 
    The bytes right after the `ROON 0104` magic are the server broker id, then the client
    broker id. (`docs/CAPTURE_GUIDE.md` has the longer walk-through.)
+
+   SOOD discovery can also return the Core's `unique_id` as a textual UUID. Its wire
+   bytes use .NET GUID order: reverse bytes in the first three UUID groups, leaving
+   the last two groups unchanged. For example, the synthetic UUID
+   `01234567-89ab-cdef-0123-456789abcdef` becomes
+   `67452301ab89efcd0123456789abcdef`. Simply removing hyphens gives the wrong order.
 
 Put both in env vars and pass them to `RoonClient` — keep your own details out of committed
 code.
@@ -80,11 +89,28 @@ the fastest way to isolate the new bytes.
 
 ```bash
 cd roon-internal-api
-npx tsc --noEmit   # keep it clean
-npx jest           # keep it green
+npm ci
+npm run lint
+npm test -- --runInBand
+npm run build
+npx ts-node tools/gen_client.ts
+git diff --exit-code -- src/generated/api.ts src/generated/struct-schemas.ts docs/reflist-audit.md
 ```
 
-The site:
+The web client:
+
+```bash
+cd roon-web
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+Run each block from the repository root. CI also requires every generated output
+to remain tracked, so deleting an output cannot be hidden by regeneration.
+
+The site (release history is generated from the root `CHANGELOG.md`):
 
 ```bash
 cd site
@@ -95,15 +121,18 @@ npm run build      # what CI deploys
 
 ## Validating a method
 
-A generated method only really counts once its encoding is confirmed — *compiling proves
-nothing*. Any one of these is good enough:
+A generated method needs evidence beyond compilation. State the tier and Core version
+your verification covers:
 
 1. **Capture match** — your bytes equal the official client's bytes for the same call (the
    strongest evidence; see the `*.test.ts` files for the pattern).
-2. **Oracle golden** — the C# reflection tool agrees on the signature / struct shape.
-3. **Round-trip** — encode an argument, re-read it through `ObjectGraph`, get the same value
-   back (handy for structs you don't have a capture for).
-4. **Live effect** — the Core visibly does the thing (UI change, audio, read-back).
+2. **Receiver/oracle evidence** — inspect the actual codec as well as reflection metadata.
+   A CLR return type alone does not establish its wire representation.
+3. **Byte/behavior regression** — test exact framing, following-field alignment, retries,
+   and the real receiver's cache lifecycle. Self-consistent round trips alone can miss a
+   shared incorrect assumption.
+4. **Live read or effect** — a real Core returns the expected data or visibly performs an
+   authorized action. A read-only success does not validate a mutation path.
 
 Add a test under the relevant `src/**/*.test.ts` when you confirm something.
 
@@ -119,24 +148,19 @@ without intent and a backup. Encoding-validate them instead.
 - Favorites and metadata edits are reversible — still test on disposable data.
 - The protocol is **private and unversioned** — expect it to change between Roon releases.
 
-## Best place to start: search
+## Useful next contributions
 
-The one genuinely open piece. The `UnifiedSearch` call looks byte-correct and the Core *does*
-return full results — but it delivers them lazily: after `UnifiedSearch`, the official client
-fires a batch of per-section follow-up `Library` queries (method ids around 748–760), and
-result objects stream into collections.
+UnifiedSearch now follows the callback's result memberships, including cached and
+concurrent results. Broader provider/version coverage remains useful, but collecting
+global graph objects or substring matches is not the current search implementation.
 
-To push it forward:
+The open [signature-drift checker proposal](https://github.com/arthursoares/roon-api-reverse-engineering/issues/16)
+is a scoped next contribution: compare shipping wire names with an explicit installed-DLL
+dump, normalize only evidenced aliases, and include deterministic fixtures/self-tests.
+Most generated methods still need independent byte-level and live validation.
 
-1. Capture the official client **typing in the search box**, from connection start.
-2. Identify the per-section follow-up methods by signature + their argument structs.
-3. Replicate those calls after `UnifiedSearch`, then **harvest** the pushed
-   `AlbumLite`/`TrackLite`/`PerformerLite` objects from the graph (they do land — a captured
-   search pushed well over a hundred album objects).
-
-`RoonClient.search()` already harvests pushed objects by substring; it just needs those
-follow-up calls to trigger the push. The deeper decode notes are in
-`docs/plans/2026-06-11-MASTER-PLAN.md` (the search section) — worth reading before diving in.
+Keep the historical capture and investigation notes under `docs/plans/` intact; they
+record the earlier hypotheses and do not replace current interoperability evidence.
 
 ## License & ethics
 

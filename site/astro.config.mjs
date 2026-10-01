@@ -12,6 +12,18 @@ const base = process.env.SITE_BASE || '/roon-api-reverse-engineering';
 
 const repo = 'https://github.com/arthursoares/roon-api-reverse-engineering';
 
+// Keep published release history sourced from the repository changelog.
+// Generate it before Starlight loads content for builds and local development.
+const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8')
+  .replace(/^# Changelog\s*\n/, '')
+  .trimStart();
+writeFileSync(
+  new URL('./src/content/docs/releases.md', import.meta.url),
+  `---\ntitle: Releases\ndescription: Release history, compatibility notes, and validation evidence.\neditUrl: ${repo}/edit/main/CHANGELOG.md\n---\n\n` +
+    `This page is generated from the [repository changelog](${repo}/blob/main/CHANGELOG.md).\n\n` +
+    changelog,
+);
+
 // Starlight bases its own nav/asset URLs, but root-relative links authored in
 // markdown/MDX content and in the hero frontmatter are emitted raw (e.g.
 // `href="/journey/"`), which 404s under a project-Pages base path. Prepend the
@@ -62,6 +74,7 @@ export default defineConfig({
           label: 'Start here',
           items: [
             { label: 'Overview', link: '/' },
+            { label: 'Releases', link: '/releases/' },
             { label: 'The journey', link: '/journey/' },
           ],
         },

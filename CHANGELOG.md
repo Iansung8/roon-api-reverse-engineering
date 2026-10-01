@@ -10,6 +10,8 @@ Prepared and adversarially reviewed with Codex.
 - Read-only JSON-lines history export with bounded paging, identity deduplication,
   newest-first ordering, explicit retrieval failures, and page/query cleanup.
   [#18](https://github.com/arthursoares/roon-api-reverse-engineering/pull/18)
+- Published release history on GitHub Pages, generated from this changelog, with
+  current onboarding, contributor checks, and validation guidance.
 - Runnable SDK lint and PR validation for SDK/web tests and builds, documentation,
   and tracked, deterministic generated output.
   [#21](https://github.com/arthursoares/roon-api-reverse-engineering/pull/21),

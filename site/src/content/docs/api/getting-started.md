@@ -10,14 +10,17 @@ sidebar:
 directory of the repo. It's **not published to npm** — use it from a clone. Expect rough
 edges; this is a proof-of-concept.
 
+The latest tagged version is **v0.1.1**. See [Releases](/releases/) for changes,
+compatibility notes, and the validation performed on Roon 2.73 build 1696.
+
 ## Install
 
 ```bash
 git clone https://github.com/arthursoares/roon-api-reverse-engineering
 cd roon-api-reverse-engineering/roon-internal-api
 npm install
-npx tsc --noEmit   # type-check
-npx jest           # the small test suite
+npm run build
+npm test -- --runInBand
 ```
 
 ## What you need from your own Core

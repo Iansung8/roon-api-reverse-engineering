@@ -25,6 +25,12 @@ hero:
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
+:::note[Latest release: v0.1.1]
+The latest release fixes protocol framing, stable struct schemas, nullable values,
+repeated search, and web session recovery. It also adds read-only history export.
+[Release notes and validation limits →](/releases/)
+:::
+
 ## Why bother
 
 Roon users have been asking for a more capable API for years. The official
@@ -73,8 +79,9 @@ across setups. Treat everything as "worked for me," not "guaranteed."
     metadata edit each worked once or twice against my setup.
   </Card>
   <Card title="Lots still open" icon="puzzle">
-    Most notably full streaming-catalog search (arbitrary Tidal/Qobuz terms). In-library
-    search half-works. Plenty of rough edges. [Pitch in →](/contributing/)
+    Most generated methods and broader version/provider compatibility still need
+    validation. UnifiedSearch and bounded history reads were checked against Roon
+    2.73 build 1696. [Pitch in →](/contributing/)
   </Card>
 </CardGrid>
 
@@ -84,6 +91,9 @@ Most of this — the protocol decoding, the TypeScript port, the codegen, and th
 was done by pair-programming with [Claude](https://www.anthropic.com/claude) (Anthropic's
 Claude Code). It's as much an experiment in "how far can an AGI agent push a gnarly
 reverse-engineering task" as it is a Roon experiment.
+
+The v0.1.1 maintenance, adversarial reviews, and read-only Core validation were
+carried out with Codex. Contributor attribution is preserved in [the releases](/releases/).
 
 ## Pages
 
