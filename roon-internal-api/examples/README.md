@@ -42,5 +42,10 @@ equals the raw ticks, `TrackBase` is an inline TrackLink carrying the stable
 TrackId.
 
 ```bash
-npx ts-node examples/play-history.ts 50
+ROON_HOST=192.0.2.10 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
+  npx ts-node examples/play-history.ts 50
 ```
+
+The optional limit must be a non-negative integer (default `50`); `0` reports
+the history count without retaining a page. `ROON_BROKER_ID` remains accepted
+as a legacy alias for `ROON_SERVER_BROKER_ID`.
