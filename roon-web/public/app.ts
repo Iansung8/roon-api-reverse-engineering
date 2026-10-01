@@ -3,6 +3,9 @@
  * Phase 4: live controls — transport, volume, favorite, play (confirm), power
  * (confirm) — on top of zones/devices/search/library.
  */
+import { FavoriteState } from './favorite-state';
+import { SearchState } from './search-state';
+
 interface Zone {
   oid: string; name: string; state?: number; stateLabel: string; seekPosition?: number;
   isPlayAllowed?: boolean; isPauseAllowed?: boolean; isNextAllowed?: boolean; isPreviousAllowed?: boolean;
@@ -12,11 +15,13 @@ interface Device {
   oid: string; name: string; zoneOid?: string; volume?: number; minVolume?: number; maxVolume?: number;
   supportsVolume?: boolean; isMuted?: boolean; supportsStandby?: boolean; isStandby?: boolean;
 }
-interface Snapshot { zones: Zone[]; devices: Device[] }
-interface AlbumRow { oid: string; title: string; artist?: string }
+interface AlbumRow { oid: string; title: string; artist?: string; favorite?: boolean }
 interface TrackRow { oid: string; title: string }
 interface NamedRow { oid: string; name: string }
-interface SearchResults { albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[]; genres: NamedRow[]; tracks: TrackRow[]; loaded: number }
+interface SearchResults {
+  id: number; q: string; albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[];
+  genres: NamedRow[]; tracks: TrackRow[]; works: NamedRow[];
+}
 interface ApiMethod { name: string; signature: string; params: { name: string; type: string }[]; response: boolean }
 interface ApiService { name: string; methods: ApiMethod[] }
 interface Catalog { source: string; serviceCount: number; methodCount: number; services: ApiService[] }
@@ -31,10 +36,21 @@ let ws: WebSocket;
 let lastZones: Zone[] = [];
 let targetZone = '';
 let catalog: Catalog | null = null;
+let coreGeneration: number | null = null;
+let loadedLibraryGeneration: number | null = null;
+let libraryRequestEpoch = 0;
+const favoriteStates = new FavoriteState();
+const searchState = new SearchState();
 
 const esc = (s: string) => (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const fmtTime = (s?: number) => (s == null ? '' : `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`);
-const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
+const send = (m: object): boolean => {
+  if (ws?.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(m));
+  return true;
+};
+const sendForSession = (m: object): boolean =>
+  coreGeneration !== null && send({ ...m, generation: coreGeneration });
 function toast(text: string, kind: 'ok' | 'err' = 'ok') {
   const t = document.createElement('div');
   t.className = `toast ${kind}`; t.textContent = text; document.body.appendChild(t);
@@ -97,8 +113,13 @@ function skeleton() {
   const q = $('q') as HTMLInputElement;
   let timer: number | undefined;
   q.addEventListener('input', () => {
-    const v = q.value; clearTimeout(timer);
-    timer = window.setTimeout(() => { if (v.trim().length >= 2) send({ t: 'search', q: v }); }, 250);
+    clearTimeout(timer);
+    const next = searchState.input(q.value);
+    if (next.clear) {
+      $('search-results').innerHTML = '';
+      return;
+    }
+    timer = window.setTimeout(() => sendForSession({ t: 'search', ...next.request }), 250);
   });
   ($('target') as HTMLSelectElement).addEventListener('change', (e) => { targetZone = (e.target as HTMLSelectElement).value; });
 
@@ -111,24 +132,34 @@ function skeleton() {
     const el = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
     if (!el) return;
     const a = el.dataset.action!;
-    if (a === 'transport') send({ t: 'transport', zone: el.dataset.zone, action: el.dataset.tact });
-    else if (a === 'favorite') { send({ t: 'favorite', oid: el.dataset.oid, on: el.dataset.on !== '1' }); }
+    if (a === 'transport') sendForSession({ t: 'transport', zone: el.dataset.zone, action: el.dataset.tact });
+    else if (a === 'favorite') {
+      const oid = el.dataset.oid!;
+      const on = favoriteStates.begin(oid);
+      if (on === null) return;
+      updateFavoriteButtons(oid);
+      if (!sendForSession({ t: 'favorite', oid, on })) {
+        favoriteStates.settle(oid, false);
+        updateFavoriteButtons(oid);
+        toast('favorite: disconnected', 'err');
+      }
+    }
     else if (a === 'play') {
       const zone = targetZone || lastZones[0]?.oid;
       const zname = lastZones.find((z) => z.oid === zone)?.name ?? 'zone';
       if (!zone) return toast('no zone available', 'err');
       if (confirm(`Play "${el.dataset.title}" on ${zname}? (this will produce audio)`))
-        send({ t: 'play', zone, kind: el.dataset.kind, oid: el.dataset.oid, confirm: true });
+        sendForSession({ t: 'play', zone, kind: el.dataset.kind, oid: el.dataset.oid, confirm: true });
     } else if (a === 'power') {
       const on = el.dataset.on !== '1'; // toggling
       if (confirm(`${on ? 'Power on' : 'Standby'} "${el.dataset.name}"?`))
-        send({ t: 'power', endpoint: el.dataset.endpoint, on, confirm: true });
+        sendForSession({ t: 'power', endpoint: el.dataset.endpoint, on, confirm: true });
     }
   });
   // volume sliders
   appEl.addEventListener('change', (e) => {
     const el = e.target as HTMLInputElement;
-    if (el.classList.contains('vol')) send({ t: 'volume', endpoint: el.dataset.endpoint, value: Number(el.value) });
+    if (el.classList.contains('vol')) sendForSession({ t: 'volume', endpoint: el.dataset.endpoint, value: Number(el.value) });
   });
 }
 
@@ -182,6 +213,31 @@ function renderDevices(d: Device[]) {
   </div>`).join('');
 }
 
+function favoriteButton(a: AlbumRow): string {
+  favoriteStates.seed(a.oid, a.favorite);
+  const state = favoriteStates.view(a.oid);
+  const disabled = state.pending || state.favorite === undefined;
+  const label = state.pending ? '…' : state.favorite ? '♥' : '♡';
+  const title = state.favorite === undefined ? 'Favorite state unavailable' : state.favorite ? 'Unfavorite' : 'Favorite';
+  const pressed = state.favorite === undefined ? '' : ` aria-pressed="${state.favorite}"`;
+  return `<button class="tbtn favorite${state.favorite ? ' active' : ''}" data-action="favorite"
+    data-oid="${a.oid}"${pressed}
+    title="${title}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+}
+
+function updateFavoriteButtons(oid: string): void {
+  const state = favoriteStates.view(oid);
+  appEl.querySelectorAll<HTMLElement>('[data-action="favorite"]').forEach((node) => {
+    if (node.dataset.oid !== oid) return;
+    node.textContent = state.pending ? '…' : state.favorite ? '♥' : '♡';
+    node.classList.toggle('active', state.favorite === true);
+    if (state.favorite === undefined) node.removeAttribute('aria-pressed');
+    else node.setAttribute('aria-pressed', String(state.favorite));
+    node.title = state.favorite === undefined ? 'Favorite state unavailable' : state.favorite ? 'Unfavorite' : 'Favorite';
+    (node as HTMLButtonElement).disabled = state.pending || state.favorite === undefined;
+  });
+}
+
 function albumGrid(albums: AlbumRow[], emptyMsg: string): string {
   if (!albums.length) return `<p class="muted">${emptyMsg}</p>`;
   return `<div class="grid albums-grid">${albums.map((a) => `<div class="album">
@@ -189,7 +245,7 @@ function albumGrid(albums: AlbumRow[], emptyMsg: string): string {
     ${a.artist ? `<div class="album-artist muted">${esc(a.artist)}</div>` : ''}
     <div class="album-actions">
       <button class="tbtn" data-action="play" data-kind="album" data-oid="${a.oid}" data-title="${esc(a.title)}">▶ Play</button>
-      <button class="tbtn" data-action="favorite" data-oid="${a.oid}" data-on="0">♥</button>
+      ${favoriteButton(a)}
     </div></div>`).join('')}</div>`;
 }
 
@@ -198,34 +254,95 @@ function namedList(rows: NamedRow[]): string {
 }
 
 function renderSearch(r: SearchResults) {
-  const total = r.albums.length + r.artists.length + r.playlists.length + r.genres.length + r.tracks.length;
+  const total = r.albums.length + r.artists.length + r.playlists.length + r.genres.length + r.tracks.length + r.works.length;
   const sec = (label: string, n: number, body: string) =>
     n ? `<div class="sub-head">${label} <span class="count">${n}</span></div>${body}` : '';
   $('search-results').innerHTML = `<div class="card">
-    ${total === 0 ? '<p class="muted">no matches in the loaded working set</p>' : ''}
+    ${total === 0 ? '<p class="muted">no matches</p>' : ''}
     ${sec('Albums', r.albums.length, albumGrid(r.albums, ''))}
     ${sec('Artists', r.artists.length, namedList(r.artists))}
+    ${sec('Works', r.works.length, namedList(r.works))}
     ${sec('Tracks', r.tracks.length, `<table><tbody>${r.tracks.map((t) => `<tr>
         <td>${esc(t.title)}</td>
         <td class="num"><button class="tbtn" data-action="play" data-kind="track" data-oid="${t.oid}" data-title="${esc(t.title)}">▶</button></td>
       </tr>`).join('')}</tbody></table>`)}
     ${sec('Playlists', r.playlists.length, namedList(r.playlists))}
     ${sec('Genres', r.genres.length, namedList(r.genres))}
-    <p class="muted small note">Searches the ${r.loaded.toLocaleString()} objects the core has loaded
-      this session — not the full catalog. Full-library search needs the reactive query
-      subsystem (see <code>docs/plans/2026-06-12-search-root-cause.md</code>).</p>
+    <p class="muted small note">Results come from the Core's UnifiedSearch response for this request.
+      Available result kinds depend on what the Core returns.</p>
   </div>`;
+}
+
+function clearEntityUi(): void {
+  libraryRequestEpoch += 1;
+  favoriteStates.reset();
+  lastZones = [];
+  targetZone = '';
+  coreGeneration = null;
+  loadedLibraryGeneration = null;
+  $('zones-count').textContent = '0';
+  $('dev-count').textContent = '0';
+  $('lib-count').textContent = '0';
+  $('zones').innerHTML = '<p class="muted">reconnecting…</p>';
+  $('devices').innerHTML = '';
+  $('library').innerHTML = '<p class="muted">reconnecting…</p>';
+  $('search-results').innerHTML = '';
+  appEl.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((button) => { button.disabled = true; });
+}
+
+function restartCurrentSearch(): void {
+  const next = searchState.input(($('q') as HTMLInputElement).value);
+  if (next.clear) {
+    $('search-results').innerHTML = '';
+    return;
+  }
+  sendForSession({ t: 'search', ...next.request });
+}
+
+function acceptSnapshot(msg: { generation: number; zones: Zone[]; devices: Device[] }): void {
+  if (!Number.isSafeInteger(msg.generation)) return;
+  const changed = coreGeneration !== msg.generation;
+  if (changed) clearEntityUi();
+  coreGeneration = msg.generation;
+  statusEl.textContent = 'connected';
+  statusEl.className = 'status ok';
+  renderZones(msg.zones);
+  renderDevices(msg.devices);
+  if (loadedLibraryGeneration !== msg.generation) {
+    loadedLibraryGeneration = msg.generation;
+    void loadLibrary(msg.generation);
+    restartCurrentSearch();
+  }
 }
 
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}`);
-  ws.onopen = () => { statusEl.textContent = 'connected'; statusEl.className = 'status ok'; };
-  ws.onclose = () => { statusEl.textContent = 'reconnecting…'; statusEl.className = 'status err'; setTimeout(connectWs, 1500); };
+  ws.onopen = () => { statusEl.textContent = 'core connecting…'; statusEl.className = 'status'; };
+  ws.onclose = () => {
+    clearEntityUi();
+    statusEl.textContent = 'reconnecting…';
+    statusEl.className = 'status err';
+    setTimeout(connectWs, 1500);
+  };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.t === 'snapshot') { renderZones(msg.zones); renderDevices(msg.devices); }
-    else if (msg.t === 'searchResults') renderSearch(msg as SearchResults);
-    else if (msg.t === 'result') toast(`${msg.action}: ${msg.ok ? 'ok' : 'failed'}${msg.status ? ` (${msg.status})` : ''}`, msg.ok ? 'ok' : 'err');
+    if (msg.t === 'snapshot') acceptSnapshot(msg);
+    else if (msg.t === 'sessionClosed' || msg.t === 'sessionMismatch') {
+      if (msg.t === 'sessionMismatch' || msg.generation === coreGeneration) {
+        clearEntityUi();
+        statusEl.textContent = 'core reconnecting…';
+        statusEl.className = 'status err';
+        send({ t: 'snapshot' });
+      }
+    }
+    else if (msg.t === 'searchResults' && msg.generation === coreGeneration && searchState.accept(msg.id, msg.q)) renderSearch(msg as SearchResults);
+    else if (msg.t === 'result' && msg.generation === coreGeneration) {
+      if (msg.action === 'favorite' && typeof msg.oid === 'string') {
+        favoriteStates.settle(msg.oid, !!msg.ok);
+        updateFavoriteButtons(msg.oid);
+      }
+      toast(`${msg.action}: ${msg.ok ? 'ok' : 'failed'}${msg.status ? ` (${msg.status})` : ''}`, msg.ok ? 'ok' : 'err');
+    }
     else if (msg.t === 'error') toast(msg.msg, 'err');
   };
 }
@@ -268,9 +385,11 @@ async function loadCatalog() {
   } catch { $('api-list').innerHTML = '<p class="muted">failed to load catalog</p>'; }
 }
 
-async function loadLibrary() {
+async function loadLibrary(generation: number) {
+  const requestEpoch = ++libraryRequestEpoch;
   try {
     const lib = await (await fetch('/api/library')).json();
+    if (requestEpoch !== libraryRequestEpoch || generation !== coreGeneration || lib.generation !== generation) return;
     $('lib-count').textContent = String(lib.albums.length);
     $('library').innerHTML = albumGrid(lib.albums, 'no albums loaded');
   } catch { /* ignore */ }
@@ -278,5 +397,4 @@ async function loadLibrary() {
 
 skeleton();
 connectWs();
-loadLibrary();
 loadCatalog();

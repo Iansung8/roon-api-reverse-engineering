@@ -159,8 +159,11 @@ export class RoonClient {
    * Resolve only the callback's result graph. TopSearchResults keep the Core's
    * ranking, followed by highlighted albums and category lists in a stable
    * order. Version lists preserve their order; repeated OIDs appear once.
+   * Opt in to playlist and genre hits with includePlaylistsAndGenres. Their
+   * lists follow ranked hits/highlights and precede broad categories so large
+   * performer lists do not consume the entire result limit first.
    */
-  async search(terms: string, maxCount = 50): Promise<RoonObject[]> {
+  async search(terms: string, maxCount = 50, includePlaylistsAndGenres = false): Promise<RoonObject[]> {
     const params = this.structArg('Sooloos.Broker.Api.SearchParameters', [
       {
         name: 'System.Sooid Sooloos.Broker.Api.SearchParameters::ProfileId',
@@ -201,7 +204,7 @@ export class RoonClient {
     }
     const deadline = Date.now() + this.searchSettleMs;
     for (;;) {
-      const objects = this.searchResultObjects(result.$ref);
+      const objects = this.searchResultObjects(result.$ref, includePlaylistsAndGenres);
       if (objects !== undefined) return objects.slice(0, Math.max(0, maxCount));
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error('UnifiedSearch result graph is incomplete');
@@ -210,7 +213,7 @@ export class RoonClient {
   }
 
   /** undefined means a referenced membership object has not arrived yet. */
-  private searchResultObjects(rootId: bigint): RoonObject[] | undefined {
+  private searchResultObjects(rootId: bigint, includePlaylistsAndGenres: boolean): RoonObject[] | undefined {
     const root = this.graph.getObject(rootId);
     if (!root) return undefined;
     if (!root.typeName.endsWith('.UnifiedSearchResults')) {
@@ -222,6 +225,10 @@ export class RoonClient {
     // returned OID in the shared graph. They remain terminal search hits.
     const leaves = new Set(['AlbumLite', 'TrackLite', 'PerformerLite', 'WorkLite',
       'Album', 'Track', 'Performer', 'Work']);
+    if (includePlaylistsAndGenres) {
+      rootMembers.splice(3, 0, 'Playlists', 'Genres');
+      for (const type of ['Playlist', 'BrowserGenre', 'GenreLite']) leaves.add(type);
+    }
     const seen = new Set<bigint>();
     const out: RoonObject[] = [];
     let complete = true;
@@ -264,6 +271,9 @@ export class RoonClient {
       } else if (type.endsWith('.TopSearchResult')) {
         for (const name of ['Artist', 'Album', 'Track', 'Work',
           'LibraryArtist', 'LibraryAlbum', 'LibraryTrack', 'LibraryWork']) visit(member(fields, name));
+        if (includePlaylistsAndGenres) {
+          for (const name of ['Playlist', 'Genre']) visit(member(fields, name));
+        }
       } else {
         complete = false; // A known membership edge must resolve to a supported type.
       }

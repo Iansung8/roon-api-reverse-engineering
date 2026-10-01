@@ -8,6 +8,7 @@
     "build": "node build.mjs",
     "dev": "node build.mjs && node dist/server.js",
     "start": "node dist/server.js",
+    "test": "node test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

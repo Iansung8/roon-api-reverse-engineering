@@ -60,6 +60,9 @@ jobs:
       - name: Typecheck web client
         run: npm run typecheck
         working-directory: roon-web
+      - name: Test web client
+        run: npm test
+        working-directory: roon-web
       - name: Build web client
         run: npm run build
         working-directory: roon-web

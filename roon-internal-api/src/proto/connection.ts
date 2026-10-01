@@ -159,6 +159,7 @@ export class RoonConnection implements Transport {
             // First bytes after our ConnectRequest are the ConnectResponse:
             // remoting is live, and everything buffered belongs to it.
             if (pending.length === 0) return;
+            socket.setTimeout(0);
             this.established = true;
             const rest = pending;
             pending = Buffer.alloc(0);

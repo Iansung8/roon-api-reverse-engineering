@@ -4,6 +4,7 @@
  */
 import { RoonClient, generated } from '../../roon-internal-api/src/index';
 import { RoonObject } from '../../roon-internal-api/src/proto/objects';
+import { decodeBoolProfileData } from './profile-data-bool';
 
 function title(o: RoonObject): string | undefined {
   for (const [k, v] of Object.entries(o.fields)) if ((k.endsWith('::Title') || k.endsWith('::Name')) && typeof v === 'string') return v;
@@ -20,61 +21,70 @@ function artistOf(o: RoonObject): string | undefined {
   return undefined;
 }
 
-export interface AlbumRow { oid: string; title: string; artist?: string }
+export interface AlbumRow { oid: string; title: string; artist?: string; favorite?: boolean }
 export interface TrackRow { oid: string; title: string }
 export interface ArtistRow { oid: string; name: string }
 export interface NamedRow { oid: string; name: string }
 export interface SearchResult {
-  albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[]; genres: NamedRow[]; tracks: TrackRow[];
-  /** total objects in the working set we searched (for the UI scope note). */
-  loaded: number;
+  albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[]; genres: NamedRow[];
+  tracks: TrackRow[]; works: NamedRow[];
 }
 
-/**
- * Search the objects the core has already pushed this session (the lazy/cached
- * working set). NOTE: this is NOT a full-catalog search — server-side search
- * needs the reactive event subsystem the core never enables for our connection.
- * See docs/plans/2026-06-12-search-root-cause.md.
- */
-export async function search(roon: RoonClient, q: string): Promise<SearchResult> {
-  const needle = q.trim().toLowerCase();
-  const empty: SearchResult = { albums: [], artists: [], playlists: [], genres: [], tracks: [], loaded: 0 };
-  if (!needle) return empty;
-
-  const named = (types: string[]): NamedRow[] => {
-    const seen = new Set<string>();
-    const out: NamedRow[] = [];
-    for (const t of types) {
-      for (const o of roon.graph.findByType(t)) {
-        const n = title(o);
-        const key = o.oid.toString();
-        if (n && n.toLowerCase().includes(needle) && !seen.has(key)) {
-          seen.add(key);
-          out.push({ oid: key, name: cleanLinks(n) });
-        }
+function favoriteOf(roon: RoonClient, o: RoonObject): boolean | undefined {
+  for (const [k, v] of Object.entries(o.fields)) {
+    if (k.endsWith('::IsFavorite') && typeof v === 'boolean') return v;
+    if (k.endsWith('::IsFavorite') && Buffer.isBuffer(v)) {
+      try {
+        return decodeBoolProfileData(v, roon.profile());
+      } catch {
+        return undefined;
       }
     }
-    return out.slice(0, 50);
-  };
+  }
+  return undefined;
+}
 
-  const albumSeen = new Set<string>();
+/** Map the current SDK UnifiedSearch result objects into the web response. */
+export async function search(roon: RoonClient, q: string): Promise<SearchResult> {
+  const term = q.trim();
+  const empty: SearchResult = { albums: [], artists: [], playlists: [], genres: [], tracks: [], works: [] };
+  if (term.length < 2) return empty;
+
+  const objects = await roon.search(term, 50, true);
+  const seen = new Set<string>();
   const albums: AlbumRow[] = [];
-  for (const o of [...roon.graph.findByType('AlbumLite'), ...roon.graph.findByType('Album')]) {
-    const t = title(o);
+  const artists: NamedRow[] = [];
+  const playlists: NamedRow[] = [];
+  const genres: NamedRow[] = [];
+  const tracks: TrackRow[] = [];
+  const works: NamedRow[] = [];
+  for (const o of objects) {
     const key = o.oid.toString();
-    if (t && t.toLowerCase().includes(needle) && !albumSeen.has(key)) {
-      albumSeen.add(key);
-      albums.push({ oid: key, title: t, artist: artistOf(o) });
-    }
+    if (seen.has(key)) continue;
+    const name = title(o);
+    if (!name) continue;
+    seen.add(key);
+    if (o.typeName.endsWith('AlbumLite') || o.typeName.endsWith('.Album'))
+      albums.push({ oid: key, title: cleanLinks(name), artist: artistOf(o), favorite: favoriteOf(roon, o) });
+    else if (o.typeName.endsWith('TrackLite') || o.typeName.endsWith('.Track'))
+      tracks.push({ oid: key, title: cleanLinks(name) });
+    else if (o.typeName.endsWith('PerformerLite') || o.typeName.endsWith('.Performer'))
+      artists.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('WorkLite') || o.typeName.endsWith('.Work'))
+      works.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('.Playlist'))
+      playlists.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('GenreLite') || o.typeName.endsWith('BrowserGenre'))
+      genres.push({ oid: key, name: cleanLinks(name) });
   }
 
   return {
     albums,
-    artists: named(['PerformerLite', 'Performer']),
-    playlists: named(['Playlist']),
-    genres: named(['GenreLite', 'BrowserGenre']),
-    tracks: named(['TrackLite']).map((r) => ({ oid: r.oid, title: r.name })),
-    loaded: roon.graph.objects.size,
+    artists,
+    playlists,
+    genres,
+    tracks,
+    works,
   };
 }
 
@@ -86,7 +96,7 @@ export function library(roon: RoonClient): { albums: AlbumRow[]; artists: Artist
     const key = o.oid.toString();
     if (t && !seen.has(key)) {
       seen.add(key);
-      albums.push({ oid: key, title: t, artist: artistOf(o) });
+      albums.push({ oid: key, title: t, artist: artistOf(o), favorite: favoriteOf(roon, o) });
     }
   }
   const aseen = new Set<string>();
