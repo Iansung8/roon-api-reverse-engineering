@@ -174,6 +174,41 @@ describe('UnifiedSearch', () => {
     }
   });
 
+  test.each([
+    ['Album', 'Albums'], ['Track', 'Tracks'], ['Performer', 'Performers'], ['Work', 'Works'],
+  ])('accepts cached %s objects in Lite memberships without following metadata references', async (type, category) => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    seed(c, 901n, `Sooloos.Broker.Api.${type}`, { [`${type}::Related`]: { $ref: 999n } });
+    seed(c, 902n, `Sooloos.Broker.Api.${type}Lite`);
+    seed(c, 999n, `Sooloos.Broker.Api.${type}Lite`);
+    const cached = c.graph.getObject(901n)!;
+    seed(c, 100n, 'Sooloos.Broker.Api.UnifiedSearchResults', {
+      [`UnifiedSearchResults::${category}`]: { $ref: 101n },
+    });
+    const refs = [{ $ref: 902n }, { $ref: 901n }, { $ref: 902n }, { $ref: 901n }];
+    if (type === 'Album' || type === 'Track') {
+      seed(c, 101n, `Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.${type}LiteVersions>`, {
+        $count: 1, $items: [{ $ref: 102n }],
+      });
+      seed(c, 102n, `Sooloos.Broker.Api.${type}LiteVersions`, {
+        [`${type}LiteVersions::${category}`]: { $ref: 103n },
+      });
+    }
+    seed(c, type === 'Album' || type === 'Track' ? 103n : 101n,
+      `Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.${type}Lite>`, {
+        $count: refs.length, $items: refs,
+      });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const pending = c.search('query', 10);
+      respondSearch(t, 100n);
+      const hits = await pending;
+      expect(hits.map((o) => o.oid)).toEqual([902n, 901n]);
+      expect(hits[1]).toBe(cached);
+      expect(hits[1].typeName).toBe(`Sooloos.Broker.Api.${type}`);
+    }
+  });
+
   test('different callback roots share cached entities without leaking previous membership', async () => {
     const { c, t } = buildClient();
     seedCore(c);

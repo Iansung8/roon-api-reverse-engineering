@@ -218,7 +218,10 @@ export class RoonClient {
     }
     const rootMembers = ['TopSearchResults', 'TopAlbum', 'TopLibraryAlbum',
       'Performers', 'Composers', 'Albums', 'Tracks', 'Works'];
-    const leaves = new Set(['AlbumLite', 'TrackLite', 'PerformerLite', 'WorkLite']);
+    // Full entities implement their Lite interfaces and can already occupy a
+    // returned OID in the shared graph. They remain terminal search hits.
+    const leaves = new Set(['AlbumLite', 'TrackLite', 'PerformerLite', 'WorkLite',
+      'Album', 'Track', 'Performer', 'Work']);
     const seen = new Set<bigint>();
     const out: RoonObject[] = [];
     let complete = true;
