@@ -20,7 +20,7 @@ function artistOf(o: RoonObject): string | undefined {
   return undefined;
 }
 
-export interface AlbumRow { oid: string; title: string; artist?: string }
+export interface AlbumRow { oid: string; title: string; artist?: string; favorite?: boolean }
 export interface TrackRow { oid: string; title: string }
 export interface ArtistRow { oid: string; name: string }
 export interface NamedRow { oid: string; name: string }
@@ -28,6 +28,13 @@ export interface SearchResult {
   albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[]; genres: NamedRow[]; tracks: TrackRow[];
   /** total objects in the working set we searched (for the UI scope note). */
   loaded: number;
+}
+
+function favoriteOf(o: RoonObject): boolean | undefined {
+  for (const [k, v] of Object.entries(o.fields)) {
+    if (k.endsWith('::IsFavorite') && typeof v === 'boolean') return v;
+  }
+  return undefined;
 }
 
 /**
@@ -64,7 +71,7 @@ export async function search(roon: RoonClient, q: string): Promise<SearchResult>
     const key = o.oid.toString();
     if (t && t.toLowerCase().includes(needle) && !albumSeen.has(key)) {
       albumSeen.add(key);
-      albums.push({ oid: key, title: t, artist: artistOf(o) });
+      albums.push({ oid: key, title: t, artist: artistOf(o), favorite: favoriteOf(o) });
     }
   }
 
@@ -86,7 +93,7 @@ export function library(roon: RoonClient): { albums: AlbumRow[]; artists: Artist
     const key = o.oid.toString();
     if (t && !seen.has(key)) {
       seen.add(key);
-      albums.push({ oid: key, title: t, artist: artistOf(o) });
+      albums.push({ oid: key, title: t, artist: artistOf(o), favorite: favoriteOf(o) });
     }
   }
   const aseen = new Set<string>();

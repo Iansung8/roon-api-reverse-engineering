@@ -3,6 +3,8 @@
  * Phase 4: live controls — transport, volume, favorite, play (confirm), power
  * (confirm) — on top of zones/devices/search/library.
  */
+import { FavoriteState } from './favorite-state';
+
 interface Zone {
   oid: string; name: string; state?: number; stateLabel: string; seekPosition?: number;
   isPlayAllowed?: boolean; isPauseAllowed?: boolean; isNextAllowed?: boolean; isPreviousAllowed?: boolean;
@@ -12,8 +14,7 @@ interface Device {
   oid: string; name: string; zoneOid?: string; volume?: number; minVolume?: number; maxVolume?: number;
   supportsVolume?: boolean; isMuted?: boolean; supportsStandby?: boolean; isStandby?: boolean;
 }
-interface Snapshot { zones: Zone[]; devices: Device[] }
-interface AlbumRow { oid: string; title: string; artist?: string }
+interface AlbumRow { oid: string; title: string; artist?: string; favorite?: boolean }
 interface TrackRow { oid: string; title: string }
 interface NamedRow { oid: string; name: string }
 interface SearchResults { albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[]; genres: NamedRow[]; tracks: TrackRow[]; loaded: number }
@@ -31,10 +32,15 @@ let ws: WebSocket;
 let lastZones: Zone[] = [];
 let targetZone = '';
 let catalog: Catalog | null = null;
+const favoriteStates = new FavoriteState();
 
 const esc = (s: string) => (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const fmtTime = (s?: number) => (s == null ? '' : `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`);
-const send = (m: object) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
+const send = (m: object): boolean => {
+  if (ws?.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(m));
+  return true;
+};
 function toast(text: string, kind: 'ok' | 'err' = 'ok') {
   const t = document.createElement('div');
   t.className = `toast ${kind}`; t.textContent = text; document.body.appendChild(t);
@@ -112,7 +118,17 @@ function skeleton() {
     if (!el) return;
     const a = el.dataset.action!;
     if (a === 'transport') send({ t: 'transport', zone: el.dataset.zone, action: el.dataset.tact });
-    else if (a === 'favorite') { send({ t: 'favorite', oid: el.dataset.oid, on: el.dataset.on !== '1' }); }
+    else if (a === 'favorite') {
+      const oid = el.dataset.oid!;
+      const on = favoriteStates.begin(oid);
+      if (on === null) return;
+      updateFavoriteButtons(oid);
+      if (!send({ t: 'favorite', oid, on })) {
+        favoriteStates.settle(oid, false);
+        updateFavoriteButtons(oid);
+        toast('favorite: disconnected', 'err');
+      }
+    }
     else if (a === 'play') {
       const zone = targetZone || lastZones[0]?.oid;
       const zname = lastZones.find((z) => z.oid === zone)?.name ?? 'zone';
@@ -182,6 +198,31 @@ function renderDevices(d: Device[]) {
   </div>`).join('');
 }
 
+function favoriteButton(a: AlbumRow): string {
+  favoriteStates.seed(a.oid, a.favorite);
+  const state = favoriteStates.view(a.oid);
+  const disabled = state.pending || state.favorite === undefined;
+  const label = state.pending ? '…' : state.favorite ? '♥' : '♡';
+  const title = state.favorite === undefined ? 'Favorite state unavailable' : state.favorite ? 'Unfavorite' : 'Favorite';
+  const pressed = state.favorite === undefined ? '' : ` aria-pressed="${state.favorite}"`;
+  return `<button class="tbtn favorite${state.favorite ? ' active' : ''}" data-action="favorite"
+    data-oid="${a.oid}"${pressed}
+    title="${title}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+}
+
+function updateFavoriteButtons(oid: string): void {
+  const state = favoriteStates.view(oid);
+  appEl.querySelectorAll<HTMLElement>('[data-action="favorite"]').forEach((node) => {
+    if (node.dataset.oid !== oid) return;
+    node.textContent = state.pending ? '…' : state.favorite ? '♥' : '♡';
+    node.classList.toggle('active', state.favorite === true);
+    if (state.favorite === undefined) node.removeAttribute('aria-pressed');
+    else node.setAttribute('aria-pressed', String(state.favorite));
+    node.title = state.favorite === undefined ? 'Favorite state unavailable' : state.favorite ? 'Unfavorite' : 'Favorite';
+    (node as HTMLButtonElement).disabled = state.pending || state.favorite === undefined;
+  });
+}
+
 function albumGrid(albums: AlbumRow[], emptyMsg: string): string {
   if (!albums.length) return `<p class="muted">${emptyMsg}</p>`;
   return `<div class="grid albums-grid">${albums.map((a) => `<div class="album">
@@ -189,7 +230,7 @@ function albumGrid(albums: AlbumRow[], emptyMsg: string): string {
     ${a.artist ? `<div class="album-artist muted">${esc(a.artist)}</div>` : ''}
     <div class="album-actions">
       <button class="tbtn" data-action="play" data-kind="album" data-oid="${a.oid}" data-title="${esc(a.title)}">▶ Play</button>
-      <button class="tbtn" data-action="favorite" data-oid="${a.oid}" data-on="0">♥</button>
+      ${favoriteButton(a)}
     </div></div>`).join('')}</div>`;
 }
 
@@ -225,7 +266,13 @@ function connectWs() {
     const msg = JSON.parse(ev.data);
     if (msg.t === 'snapshot') { renderZones(msg.zones); renderDevices(msg.devices); }
     else if (msg.t === 'searchResults') renderSearch(msg as SearchResults);
-    else if (msg.t === 'result') toast(`${msg.action}: ${msg.ok ? 'ok' : 'failed'}${msg.status ? ` (${msg.status})` : ''}`, msg.ok ? 'ok' : 'err');
+    else if (msg.t === 'result') {
+      if (msg.action === 'favorite' && typeof msg.oid === 'string') {
+        favoriteStates.settle(msg.oid, !!msg.ok);
+        updateFavoriteButtons(msg.oid);
+      }
+      toast(`${msg.action}: ${msg.ok ? 'ok' : 'failed'}${msg.status ? ` (${msg.status})` : ''}`, msg.ok ? 'ok' : 'err');
+    }
     else if (msg.t === 'error') toast(msg.msg, 'err');
   };
 }

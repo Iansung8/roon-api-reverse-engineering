@@ -176,7 +176,12 @@ wss.on('connection', (ws) => {
         setTimeout(() => pushSnapshot(), 600);
       }
     } catch (e) {
-      ws.send(JSON.stringify({ t: 'error', msg: (e as Error).message }));
+      const error = (e as Error).message;
+      if (msg.t === 'favorite') {
+        ws.send(JSON.stringify({ t: 'result', action: 'favorite', oid: String(msg.oid), on: !!msg.on, ok: false, status: error }));
+      } else {
+        ws.send(JSON.stringify({ t: 'error', msg: error }));
+      }
     }
   });
 });

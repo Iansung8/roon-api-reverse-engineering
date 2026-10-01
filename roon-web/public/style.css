@@ -117,6 +117,7 @@ tr[data-oid]:hover td { color: var(--accent); }
 .small { font-size: 12px; margin-top: 10px; }
 .album-actions { display: flex; gap: 6px; margin-top: 10px; }
 .album-actions .tbtn { flex: 1; }
+.favorite.active { color: var(--err); }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.4); z-index: 100; }
 .toast.ok { border-color: #1f4d3a; } .toast.err { border-color: #4d1f1f; color: var(--err); }
 
