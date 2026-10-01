@@ -25,3 +25,28 @@ examples. Their names and old comments do not establish current behavior.
 request it registers and dispatches `FavoriteOrBan`. Treat its outcome as historical evidence,
 not a supported or safe control workflow. Other `favorite-*`, `live-*`, `edit-*`, and
 `test-*` scripts may likewise send commands or make assumptions tied to one captured Core.
+
+## Read-only play-history export
+
+### `play-history.ts`
+**Status: WORKING** (validated live against a 2.71 Core with a 10,630-play
+history: a single-page run and a 150-play multi-page run — newest-first
+order, unique play identities, zero unresolvable skips)
+
+Exports the profile's play history, newest first, via
+`Library::VirtualHistoryQuery` + per-page `RetainPage`/`ReleasePage`,
+printing one JSON line per play (playedAt / artist / title / album /
+completionPct / roonTrackId). The header documents the HistoryPlay wire
+layout: `Time` is a .NET DateTime int64 (Kind bits + ticks), `HistoryPlayId`
+is an opaque stable identity (it must not be interpreted as the play time), and
+`TrackBase` is an inline TrackLink carrying the stable TrackId.
+
+```bash
+ROON_HOST=192.0.2.10 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
+  npx ts-node examples/play-history.ts 50
+```
+
+The optional limit must be a non-negative integer (default `50`); `0` reports
+the history count without retaining a page. `ROON_BROKER_ID` remains accepted
+as a legacy alias for `ROON_SERVER_BROKER_ID`. Run each export with a fresh
+client connection so its object graph contains only that query's history.
