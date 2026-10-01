@@ -36,7 +36,23 @@ export class RoonConnection implements Transport {
   private established = false;
   readonly clientBrokerId = crypto.randomBytes(16);
 
+  /**
+   * Fired when the socket closes for any reason (explicit close(), peer
+   * disconnect, error) so the remoting layer can fail in-flight requests
+   * immediately instead of waiting out their timeouts. Fires at most once per
+   * socket attempt: a connect() that fails before establishment consumes its
+   * own notification, and a retried connect() re-arms it.
+   */
+  onclosed: () => void = () => {};
+  private onclosedFired = false;
+
   constructor(private opts: ConnectionOptions) {}
+
+  private fireOnclosed(): void {
+    if (this.onclosedFired) return;
+    this.onclosedFired = true;
+    this.onclosed();
+  }
 
   onData(handler: (chunk: Buffer) => void): void {
     this.dataHandler = handler;
@@ -51,8 +67,24 @@ export class RoonConnection implements Transport {
   connect(): Promise<void> {
     const { host, port = 9332, serverBrokerId } = this.opts;
     return new Promise<void>((resolve, reject) => {
+      // This class does not support reconnecting once a session has been
+      // established: `established` never resets, and the remoting layer's
+      // DEFMETHOD/DEFTYPE declarations and object ids are per-connection
+      // anyway. Reject before touching any state (a live session stays
+      // usable) instead of feeding a second handshake to the frame parser
+      // and stalling until the socket timeout. Reconnect = new instance.
+      if (this.established) {
+        reject(
+          new Error('RoonConnection cannot reconnect after an established session; create a new instance')
+        );
+        return;
+      }
       const socket = new net.Socket();
       this.socket = socket;
+      // Re-arm the once-only close notification for this attempt: a connect()
+      // that failed before establishment must not consume the notification
+      // that belongs to the socket we are about to open.
+      this.onclosedFired = false;
       let step = 0;
       socket.setTimeout(20000);
 
@@ -63,6 +95,13 @@ export class RoonConnection implements Transport {
 
       socket.on('timeout', () => fail(new Error('connection timed out during handshake')));
       socket.on('error', fail);
+      socket.on('close', () => {
+        // A superseded attempt's socket must not clear the current socket or
+        // fail its requests: only the socket we still own reports closure.
+        if (this.socket !== socket) return;
+        this.socket = null;
+        this.fireOnclosed();
+      });
 
       socket.on('connect', () => {
         step = 1;
@@ -109,7 +148,11 @@ export class RoonConnection implements Transport {
   }
 
   close(): void {
+    // Idempotent: fireOnclosed dedupes the synchronous notification here, and
+    // the destroyed socket's own later 'close' event is guarded out because
+    // this.socket is already null by the time it fires.
     this.socket?.destroy();
     this.socket = null;
+    this.fireOnclosed();
   }
 }

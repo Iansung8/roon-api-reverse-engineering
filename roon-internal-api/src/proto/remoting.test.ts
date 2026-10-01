@@ -100,3 +100,62 @@ describe('RemotingClient (ported from RemotingClientV2)', () => {
     expect(reply.rid).toBe(5);
   });
 });
+
+describe('connection-close cleanup', () => {
+  // Mirrors node-roon-api's moo.clean_up(): in-flight requests must fail
+  // promptly when the connection dies, not sit until the request timeout, and
+  // cleanup must be idempotent because it fires from both the explicit
+  // close() path and the socket 'close' event.
+
+  test('failPending rejects every in-flight request immediately', async () => {
+    const t = new MockTransport();
+    const c = new RemotingClient(t);
+    const a = c.callMethod(1n, SIG, Buffer.alloc(0));
+    const b = c.callMethod(2n, SIG, Buffer.alloc(0));
+    c.failPending('connection closed by test');
+    await expect(a).rejects.toThrow(/connection closed by test/);
+    await expect(b).rejects.toThrow(/connection closed by test/);
+  });
+
+  test('failPending is idempotent', async () => {
+    const t = new MockTransport();
+    const c = new RemotingClient(t);
+    const p = c.callMethod(1n, SIG, Buffer.alloc(0));
+    c.failPending('first');
+    c.failPending('second'); // nothing pending — must not throw
+    await expect(p).rejects.toThrow(/first/);
+  });
+
+  test('a request against a dead transport fails immediately and leaks nothing', async () => {
+    // getService() reaches request() without a preceding DEFMETHOD write, so
+    // the throwing send exercises request()'s own catch — callMethod() would
+    // throw earlier, inside ensureDefined(), and never enter request().
+    const dead: Transport = {
+      send: () => {
+        throw new Error('not connected');
+      },
+      onData: () => {},
+    };
+    const c = new RemotingClient(dead);
+    jest.useFakeTimers();
+    try {
+      await expect(c.getService(new Uint8Array(16))).rejects.toThrow(/not connected/);
+      // The catch must also clean up: no leaked pending entry, no live timer.
+      expect((c as unknown as { pending: Map<number, unknown> }).pending.size).toBe(0);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('callMethod against a dead transport also rejects (throw lands in ensureDefined)', async () => {
+    const dead: Transport = {
+      send: () => {
+        throw new Error('not connected');
+      },
+      onData: () => {},
+    };
+    const c = new RemotingClient(dead);
+    await expect(c.callMethod(1n, SIG, Buffer.alloc(0))).rejects.toThrow(/not connected/);
+  });
+});
