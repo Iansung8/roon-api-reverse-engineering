@@ -31,35 +31,52 @@ specific to your install, so supply your own rather than copying mine:
 | `serverBrokerId` | 16-byte Core id (hex) | read it off a capture of the handshake — see [Contributing](/contributing/#finding-your-core-details) |
 
 :::tip
-Keep them in env vars, not in code. The examples read `ROON_HOST`; do the same for the
-broker id so you don't accidentally commit your own details.
+Keep them in env vars, not in code. The demo reads `ROON_HOST` and
+`ROON_SERVER_BROKER_ID`, so you don't accidentally commit your own details.
+`ROON_BROKER_ID` remains a legacy alias for the demo only; use the server-specific name in new
+scripts.
 :::
 
 ## Connect and read
 
-The `RoonClient` facade is the front door. A minimal, read-only program (placeholders below
-— swap in your own values):
+The `RoonClient` facade is the front door. A minimal, read-only program:
 
 ```ts
-import { RoonClient } from 'roon-internal-api'; // or '../src/proto/client' in-repo
+import { RoonClient } from './src';
 
-const roon = new RoonClient({
-  host: process.env.ROON_HOST!,                         // e.g. '192.168.1.50'
-  serverBrokerId: Buffer.from(process.env.ROON_BROKER_ID!, 'hex'), // 16-byte hex
-});
+async function main(): Promise<void> {
+  const host = process.env.ROON_HOST;
+  const brokerId = process.env.ROON_SERVER_BROKER_ID;
+  if (!host || !brokerId || !/^[0-9a-f]{32}$/i.test(brokerId)) {
+    throw new Error('Set ROON_HOST and ROON_SERVER_BROKER_ID (32 hex characters)');
+  }
 
-await roon.connect();
+  const roon = new RoonClient({
+    host,
+    serverBrokerId: Buffer.from(brokerId, 'hex'),
+  });
+  try {
+    await roon.connect();
 
-console.log('Library oid:', roon.serviceOid('Library').toString());
-console.log('Zone oid:', roon.zoneByName('Living Room')?.toString());
+    console.log('Library oid:', roon.serviceOid('Library').toString());
+    console.log('Zone oid:', roon.zoneByName('Living Room')?.toString());
 
-const album = roon.findByTitle('AlbumLite', 'Kind of Blue');
-console.log(album ? `found, oid=${album.oid}` : 'not loaded');
+    const album = roon.findByTitle('AlbumLite', 'Kind of Blue');
+    console.log(album ? `found, oid=${album.oid}` : 'not loaded');
+  } finally {
+    roon.close();
+  }
+}
 
-roon.close();
+main().catch(console.error);
 ```
 
-Run it with `npx ts-node examples/demo.ts` (set `ROON_HOST`).
+Run the included version with both variables set:
+
+```bash
+ROON_HOST=192.168.1.50 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
+  npx ts-node examples/demo.ts
+```
 
 On `connect()` the client does the handshake, resolves the root service, and starts
 ingesting the streaming object graph — so zones, devices, now-playing, and loaded library
