@@ -46,7 +46,7 @@ class FakeWebSocket {
 
 const sockets: FakeWebSocket[] = [];
 
-test('app wiring invalidates old entities and correlates repeated searches across sessions', async () => {
+test('app wiring invalidates old entities and correlates repeated searches across sessions', async (t) => {
   const ids = [
     'status', 'app', 'q', 'target', 'api-filter', 'search-results', 'zones-count', 'zones',
     'dev-count', 'devices', 'lib-count', 'library', 'api-count', 'api-list',
@@ -57,6 +57,8 @@ test('app wiring invalidates old entities and correlates repeated searches acros
   const timers = new Map<number, { callback: () => void; delay: number }>();
   let timerId = 0;
   let serverGeneration = 1;
+  let deferLibrary = false;
+  const pendingLibrary: Array<(response: { json: () => Promise<unknown> }) => void> = [];
 
   const fakeSetTimeout = (callback: () => void, delay = 0) => {
     const id = ++timerId;
@@ -93,15 +95,19 @@ test('app wiring invalidates old entities and correlates repeated searches acros
   globals.confirm = () => true;
   globals.setTimeout = fakeSetTimeout;
   globals.clearTimeout = (id: number) => timers.delete(id);
-  globals.fetch = async (url: string) => ({
-    json: async () => url === '/api/catalog'
-      ? { source: 'test', serviceCount: 0, methodCount: 0, services: [] }
-      : {
-          generation: serverGeneration,
-          albums: [{ oid: '10', title: `Album ${serverGeneration}`, favorite: false }],
-          artists: [],
-        },
-  });
+  globals.fetch = (url: string) => {
+    if (url === '/api/catalog') {
+      return Promise.resolve({ json: async () => ({ source: 'test', serviceCount: 0, methodCount: 0, services: [] }) });
+    }
+    if (deferLibrary) return new Promise((resolve) => pendingLibrary.push(resolve));
+    return Promise.resolve({
+      json: async () => ({
+        generation: serverGeneration,
+        albums: [{ oid: '10', title: `Album ${serverGeneration}`, favorite: false }],
+        artists: [],
+      }),
+    });
+  };
 
   try {
     await import('./app');
@@ -166,6 +172,46 @@ test('app wiring invalidates old entities and correlates repeated searches acros
     }) });
     assert.match(elements.get('search-results')!.innerHTML, /Second result/);
     assert.doesNotMatch(elements.get('search-results')!.innerHTML, /Stale result/);
+
+    await t.test('late pre-disconnect library response cannot replace the same-generation reload', async () => {
+      deferLibrary = true;
+      secondSocket.onclose?.();
+      runDelay(1500);
+      const thirdSocket = sockets[2];
+      thirdSocket.onopen?.();
+      thirdSocket.onmessage?.({ data: JSON.stringify({ t: 'snapshot', generation: 2, zones: [], devices: [] }) });
+      assert.equal(pendingLibrary.length, 1);
+
+      thirdSocket.onclose?.();
+      runDelay(1500);
+      const fourthSocket = sockets[3];
+      fourthSocket.onopen?.();
+      fourthSocket.onmessage?.({ data: JSON.stringify({ t: 'snapshot', generation: 2, zones: [], devices: [] }) });
+      assert.equal(pendingLibrary.length, 2);
+
+      pendingLibrary[1]({
+        json: async () => ({
+          generation: 2,
+          albums: [{ oid: '10', title: 'Fresh library B', favorite: false }],
+          artists: [],
+        }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.match(elements.get('library')!.innerHTML, /Fresh library B/);
+
+      pendingLibrary[0]({
+        json: async () => ({
+          generation: 2,
+          albums: [{ oid: '10', title: 'Stale library A', favorite: true }],
+          artists: [],
+        }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.match(elements.get('library')!.innerHTML, /Fresh library B/);
+      assert.doesNotMatch(elements.get('library')!.innerHTML, /Stale library A/);
+    });
   } finally {
     Object.assign(globals, originals);
   }

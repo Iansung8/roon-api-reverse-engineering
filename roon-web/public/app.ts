@@ -38,6 +38,7 @@ let targetZone = '';
 let catalog: Catalog | null = null;
 let coreGeneration: number | null = null;
 let loadedLibraryGeneration: number | null = null;
+let libraryRequestEpoch = 0;
 const favoriteStates = new FavoriteState();
 const searchState = new SearchState();
 
@@ -273,6 +274,7 @@ function renderSearch(r: SearchResults) {
 }
 
 function clearEntityUi(): void {
+  libraryRequestEpoch += 1;
   favoriteStates.reset();
   lastZones = [];
   targetZone = '';
@@ -384,9 +386,10 @@ async function loadCatalog() {
 }
 
 async function loadLibrary(generation: number) {
+  const requestEpoch = ++libraryRequestEpoch;
   try {
     const lib = await (await fetch('/api/library')).json();
-    if (generation !== coreGeneration || lib.generation !== generation) return;
+    if (requestEpoch !== libraryRequestEpoch || generation !== coreGeneration || lib.generation !== generation) return;
     $('lib-count').textContent = String(lib.albums.length);
     $('library').innerHTML = albumGrid(lib.albums, 'no albums loaded');
   } catch { /* ignore */ }
