@@ -2,6 +2,7 @@ import { RoonClient } from './client';
 import { RemotingClient, Cmd, Transport } from './remoting';
 import { FrameParser, encodeResponse } from './frame';
 import { BinaryWriter } from './writer';
+import { BinaryReader } from './reader';
 import { RoonObject } from './objects';
 
 class MockTransport implements Transport {
@@ -45,6 +46,63 @@ function seedCore(c: RoonClient) {
   seed(c, 124n, 'Sooloos.Broker.Api.Profile', {
     'Sooloos.Broker.Api.Profile::ProfileId': PROFILE_ID,
   });
+}
+
+interface DeclaredType {
+  name: string;
+  members: { name: string; propType: number }[];
+}
+
+function declaredTypes(t: MockTransport): Map<number, DeclaredType> {
+  const types = new Map<number, DeclaredType>();
+  for (const frame of t.sentFrames().filter((f) => f.cmd === Cmd.DEFTYPE)) {
+    const r = new BinaryReader(frame.body);
+    const id = r.flexInt();
+    const name = r.string() ?? '';
+    const members = Array.from({ length: r.flexInt() }, () => ({
+      name: r.string() ?? '',
+      propType: r.integer(),
+    }));
+    types.set(id, { name, members });
+  }
+  return types;
+}
+
+function inlineValue(r: BinaryReader): { typeId: number; body: BinaryReader } {
+  expect(r.long()).toBe(1n);
+  const typeId = r.flexInt();
+  return { typeId, body: new BinaryReader(r.bytes(r.flexInt())) };
+}
+
+async function completeLatestCall(t: MockTransport, result: Promise<unknown>): Promise<void> {
+  const call = t.sentFrames().filter((f) => f.cmd === Cmd.CALL).at(-1)!;
+  t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('').toBuffer(), true));
+  await result;
+}
+
+function latestAlbumEdit(t: MockTransport): { memberName: string; value: BinaryReader } {
+  const types = declaredTypes(t);
+  const call = t.sentFrames().filter((f) => f.cmd === Cmd.CALL).at(-1)!;
+  const callBody = new BinaryReader(call.body);
+  callBody.long(); // Library service oid
+  callBody.flexInt(); // Edit method id
+
+  const libraryEdit = inlineValue(callBody);
+  const libraryBody = libraryEdit.body;
+  expect(libraryBody.flexInt()).toBe(1); // LibraryEdit::Albums
+  const albumsBlob = new BinaryReader(libraryBody.bytes(libraryBody.integer()));
+  expect(albumsBlob.flexInt()).toBe(1); // one AlbumEdit
+
+  const albumEdit = inlineValue(albumsBlob);
+  const albumType = types.get(albumEdit.typeId)!;
+  const albumBody = albumEdit.body;
+  expect(albumBody.flexInt()).toBe(1); // AlbumId
+  albumBody.long();
+  const memberIndex = albumBody.flexInt();
+  return {
+    memberName: albumType.members[memberIndex - 1].name,
+    value: albumBody,
+  };
 }
 
 describe('profile resolution', () => {
@@ -122,5 +180,42 @@ describe('UnifiedSearch', () => {
     const call = t.sentFrames().find((f) => f.cmd === Cmd.CALL)!;
     t.deliver(encodeResponse(call.rid!, new BinaryWriter().string('Exception').toBuffer(), true));
     await expect(p).rejects.toThrow(/UnifiedSearch failed/);
+  });
+});
+
+describe('album edit struct schemas', () => {
+  test('a labels edit after a genres edit retains the Labels member and values', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+
+    await completeLatestCall(t, c.editAlbum(17n, { addGenres: ['Jazz'] }));
+    const labels = c.editAlbum(17n, { addLabels: ['ECM'] });
+    const decoded = latestAlbumEdit(t);
+    await completeLatestCall(t, labels);
+
+    expect(decoded.memberName).toContain('::Labels');
+    const editList = inlineValue(decoded.value);
+    const editListType = declaredTypes(t).get(editList.typeId)!;
+    expect(editListType.members[editList.body.flexInt() - 1].name).toContain('::AddValues');
+    const added = new BinaryReader(editList.body.bytes(editList.body.integer()));
+    expect(added.flexInt()).toBe(1);
+    expect(added.string()).toBe('ECM');
+  });
+
+  test('a rating edit after a title edit retains the Rating member and value', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+
+    await completeLatestCall(t, c.editAlbum(17n, { title: 'Old title' }));
+    const rating = c.editAlbum(17n, { rating: 5 });
+    const decoded = latestAlbumEdit(t);
+    await completeLatestCall(t, rating);
+
+    expect(decoded.memberName).toContain('::Rating');
+    const editRating = inlineValue(decoded.value);
+    const ratingType = declaredTypes(t).get(editRating.typeId)!;
+    expect(ratingType.members[editRating.body.flexInt() - 1].name).toContain('::EditValue');
+    expect(editRating.body.boolean()).toBe(true);
+    expect(editRating.body.integer()).toBe(5);
   });
 });

@@ -76,6 +76,20 @@ describe('RemotingClient (ported from RemotingClientV2)', () => {
     expect(defmethods.length).toBe(1);
   });
 
+  test('reuses identical type schemas but separates incompatible member indexes', () => {
+    const t = new MockTransport();
+    const c = new RemotingClient(t);
+    const genres = [{ name: 'AlbumEdit::Genres', propType: 23 }];
+    const labels = [{ name: 'AlbumEdit::Labels', propType: 23 }];
+
+    const genresId = c.defineType('AlbumEdit', genres);
+    expect(c.defineType('AlbumEdit', genres)).toBe(genresId);
+    const labelsId = c.defineType('AlbumEdit', labels);
+
+    expect(labelsId).not.toBe(genresId);
+    expect(t.sentFrames().filter((f) => f.cmd === Cmd.DEFTYPE)).toHaveLength(2);
+  });
+
   test('getService parses status + object id', async () => {
     const t = new MockTransport();
     const c = new RemotingClient(t);

@@ -104,14 +104,19 @@ export class RemotingClient {
   /**
    * Declare a client value type to the server (DEFTYPE, cmd 5) on first use and
    * return its client-assigned type id. `members` may be a subset (or empty) —
-   * the server maps each member by name; absent members default. Ported from
-   * RemotingClientV2._WriteTypeId.
+   * the server maps each member by name; absent members default. Each ordered
+   * schema gets its own id because inline values address members by index.
+   * Ported from RemotingClientV2._WriteTypeId.
    */
   defineType(typeName: string, members: { name: string; propType: number }[] = []): number {
-    let id = this.clientTypeIds.get(typeName);
+    const schemaKey = JSON.stringify([
+      typeName,
+      members.map(({ name, propType }) => [name, propType]),
+    ]);
+    let id = this.clientTypeIds.get(schemaKey);
     if (id === undefined) {
       id = this.nextClientTypeId++;
-      this.clientTypeIds.set(typeName, id);
+      this.clientTypeIds.set(schemaKey, id);
     }
     if (!this.declaredTypes.has(id)) {
       this.declaredTypes.add(id);

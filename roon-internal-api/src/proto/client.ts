@@ -148,7 +148,7 @@ export class RoonClient {
   /**
    * Build a populated by-value struct argument: declare the given members
    * (cmd 5 DEFTYPE, indices 1..N in order) and serialize them as an inline
-   * value object. Use the SAME members for a given type within a session.
+   * value object. Remoting assigns a stable type id to each ordered schema.
    */
   structArg(typeName: string, fields: StructField[]): Buffer {
     const typeId = this.remoting.defineType(
