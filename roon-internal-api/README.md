@@ -2,65 +2,63 @@
 
 TypeScript client for Roon's internal binary protocol on port 9332.
 
-**Status:** Early development - only `setFavorite` is implemented.
+**Status:** Proof-of-concept. `RoonClient` and the generated API surface are exported, but
+only a small subset has been exercised against a live Core.
 
 ## Installation
 
 ```bash
-npm install roon-internal-api
+git clone https://github.com/arthursoares/roon-api-reverse-engineering
+cd roon-api-reverse-engineering/roon-internal-api
+npm install
 ```
+
+`roon-internal-api` is not published to npm; use it from a clone.
 
 ## Usage
 
 ```typescript
-import { RoonInternalClient, sooidFromHex } from 'roon-internal-api';
+import { RoonClient } from './src';
 
-const client = new RoonInternalClient({
-  host: 'YOUR_CORE_IP', // Your Roon Core IP
-  port: 9332,
-  autoReconnect: true,
-});
+async function main(): Promise<void> {
+  const host = process.env.ROON_HOST;
+  const brokerId = process.env.ROON_SERVER_BROKER_ID;
+  if (!host || !brokerId || !/^[0-9a-f]{32}$/i.test(brokerId)) {
+    throw new Error('Set ROON_HOST and ROON_SERVER_BROKER_ID (32 hex characters)');
+  }
 
-client.on('connected', () => console.log('Connected!'));
-client.on('error', (err) => console.error('Error:', err));
+  const roon = new RoonClient({
+    host,
+    serverBrokerId: Buffer.from(brokerId, 'hex'),
+  });
 
-await client.connect();
+  try {
+    await roon.connect();
+    console.log('Library oid:', roon.serviceOid('Library').toString());
+    console.log('Zone oid:', roon.zoneByName('Living Room')?.toString());
+  } finally {
+    roon.close();
+  }
+}
 
-// Favorite a track (you need the Sooid from traffic capture)
-const trackId = sooidFromHex('0102030405060708090a0b0c0d0e0f10');
-await client.library.setFavorite(trackId, true);
-
-await client.disconnect();
+main().catch(console.error);
 ```
+
+The included read-only demo uses the same validated configuration:
+
+```bash
+ROON_HOST=192.168.1.50 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
+  npx ts-node examples/demo.ts
+```
+
+`ROON_BROKER_ID` is accepted as a legacy alias by the demo, but new scripts should use
+`ROON_SERVER_BROKER_ID`.
 
 ## Services
 
-- **library** - Favorites (implemented), browsing, search (TODO)
-- **transport** - Playback operations (TODO)
-- **dsp** - DSP configuration (TODO)
-- **playlists** - Playlist management (TODO)
-
-## With node-roon-api
-
-This library is designed to work alongside the official node-roon-api:
-
-```typescript
-import RoonApi from 'node-roon-api';
-import { RoonInternalClient } from 'roon-internal-api';
-
-const roon = new RoonApi({
-  // ... config
-  core_paired: async (core) => {
-    const internal = new RoonInternalClient({
-      host: core.moo.transport.host,
-    });
-    await internal.connect();
-    // Use both APIs
-  },
-});
-
-roon.start_discovery();
-```
+`RoonClient` exposes the connection lifecycle and graph helpers. `makeApi(roon)` exposes
+generated service wrappers. Both can cause real Core actions when you invoke mutating methods;
+see the site recipes and the examples index before using them.
 
 ## Development
 

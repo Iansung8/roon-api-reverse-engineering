@@ -56,20 +56,36 @@ setups. Treat everything as "worked for me."
 cd roon-internal-api
 npm install
 npx tsc --noEmit && npx jest      # type-check + tests
-npx ts-node examples/demo.ts       # connect + read (set ROON_HOST)
+ROON_HOST=192.168.1.50 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
+  npx ts-node examples/demo.ts     # connect + read your Core's object graph
 ```
 
-```ts
-import { RoonClient } from './src/proto/client';
+`ROON_BROKER_ID` remains accepted as a legacy alias by `examples/demo.ts`; new scripts should
+use `ROON_SERVER_BROKER_ID`.
 
-// Supply your OWN Core's details (neither is a secret — there's no auth).
-const roon = new RoonClient({
-  host: process.env.ROON_HOST!,                                    // e.g. 192.168.1.50
-  serverBrokerId: Buffer.from(process.env.ROON_BROKER_ID!, 'hex'), // 16-byte hex
-});
-await roon.connect();
-await roon.playAlbumOnZone('Living Room', 'Kind of Blue');  // produces audio
-roon.close();
+```ts
+import { RoonClient } from './src';
+
+async function main(): Promise<void> {
+  const host = process.env.ROON_HOST;
+  const brokerId = process.env.ROON_SERVER_BROKER_ID;
+  if (!host || !brokerId || !/^[0-9a-f]{32}$/i.test(brokerId)) {
+    throw new Error('Set ROON_HOST and ROON_SERVER_BROKER_ID (32 hex characters)');
+  }
+
+  const roon = new RoonClient({
+    host,
+    serverBrokerId: Buffer.from(brokerId, 'hex'),
+  });
+  try {
+    await roon.connect();
+    console.log('Library oid:', roon.serviceOid('Library').toString());
+  } finally {
+    roon.close();
+  }
+}
+
+main().catch(console.error);
 ```
 
 See [Getting started](https://arthursoares.github.io/roon-api-reverse-engineering/api/getting-started/)
