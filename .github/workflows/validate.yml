@@ -37,10 +37,13 @@ jobs:
         run: npx ts-node tools/gen_client.ts
         working-directory: roon-internal-api
       - name: Verify generated files are current
-        run: >-
-          git diff --exit-code --
-          roon-internal-api/src/generated/api.ts
-          roon-internal-api/docs/reflist-audit.md
+        run: |
+          git ls-files --error-unmatch -- \
+            roon-internal-api/src/generated/api.ts \
+            roon-internal-api/docs/reflist-audit.md >/dev/null
+          git diff --exit-code -- \
+            roon-internal-api/src/generated/api.ts \
+            roon-internal-api/docs/reflist-audit.md
 
       - name: Lint SDK
         run: npm run lint
