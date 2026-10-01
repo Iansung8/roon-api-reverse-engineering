@@ -76,6 +76,31 @@ describe('RemotingClient (ported from RemotingClientV2)', () => {
     expect(defmethods.length).toBe(1);
   });
 
+  test('defineType keeps one schema per type and rejects incompatible reuse', () => {
+    const t = new MockTransport();
+    const c = new RemotingClient(t);
+    const members = [{ name: 'AlbumEdit::Genres', propType: 23 }];
+    const id = c.defineType('AlbumEdit', members);
+    expect(c.defineType('AlbumEdit', members)).toBe(id);
+    members[0].name = 'AlbumEdit::Labels';
+    expect(() => c.defineType('AlbumEdit', members)).toThrow(/incompatible schema/i);
+    expect(() => c.defineType('AlbumEdit', [])).toThrow(/incompatible schema/i);
+    expect(t.sentFrames().filter((f) => f.cmd === Cmd.DEFTYPE)).toHaveLength(1);
+  });
+
+  test('reordering, type changes, and empty-to-populated declarations are incompatible', () => {
+    const t = new MockTransport();
+    const c = new RemotingClient(t);
+    const members = [{ name: 'A', propType: 0 }, { name: 'B', propType: 20 }];
+    c.defineType('Known', members);
+    expect(() => c.defineType('Known', [...members].reverse())).toThrow(/incompatible schema/);
+    expect(() => c.defineType('Known', [{ ...members[0], propType: 1 }, members[1]])).toThrow(/incompatible schema/);
+    c.defineType('Empty', []);
+    expect(() => c.defineType('Empty', members)).toThrow(/incompatible schema/);
+    expect(() => c.defineType('Duplicate', [members[0], members[0]])).toThrow(/duplicate members/);
+    expect(t.sentFrames().filter((f) => f.cmd === Cmd.DEFTYPE)).toHaveLength(2);
+  });
+
   test('getService parses status + object id', async () => {
     const t = new MockTransport();
     const c = new RemotingClient(t);

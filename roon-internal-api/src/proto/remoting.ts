@@ -95,30 +95,27 @@ export class RemotingClient {
     this.transport.send(encodeRequest(Cmd.DEFMETHOD, body, null));
   }
 
-  // Client-declared value types (for by-value struct args). Separate id space
-  // from method ids; the server keys its _remote_types by our declared id.
-  private clientTypeIds = new Map<string, number>();
+  // The receiver maps remote IDs to local types, but stores property mappings
+  // by LOCAL type ID. Multiple schemas for one typename overwrite each other.
+  private clientTypes = new Map<string, { id: number; schema: string }>();
   private nextClientTypeId = 1;
-  private declaredTypes = new Set<number>();
 
-  /**
-   * Declare a client value type to the server (DEFTYPE, cmd 5) on first use and
-   * return its client-assigned type id. `members` may be a subset (or empty) —
-   * the server maps each member by name; absent members default. Ported from
-   * RemotingClientV2._WriteTypeId.
-   */
-  defineType(typeName: string, members: { name: string; propType: number }[] = []): number {
-    let id = this.clientTypeIds.get(typeName);
-    if (id === undefined) {
-      id = this.nextClientTypeId++;
-      this.clientTypeIds.set(typeName, id);
+  /** Declare one immutable ordered schema per type for this session. */
+  defineType(typeName: string, members: readonly { name: string; propType: number }[] = []): number {
+    const schema = JSON.stringify(members.map(({ name, propType }) => [name, propType]));
+    const existing = this.clientTypes.get(typeName);
+    if (existing) {
+      if (existing.schema !== schema) throw new Error(`incompatible schema for ${typeName}: use the full canonical schema`);
+      return existing.id;
     }
-    if (!this.declaredTypes.has(id)) {
-      this.declaredTypes.add(id);
-      const w = new BinaryWriter().flexInt(id).string(typeName).flexInt(members.length);
-      for (const m of members) w.string(m.name).integer(m.propType);
-      this.transport.send(encodeRequest(Cmd.DEFTYPE, w.toBuffer(), null));
+    if (new Set(members.map((m) => m.name)).size !== members.length) {
+      throw new Error(`duplicate members in schema for ${typeName}`);
     }
+    const id = this.nextClientTypeId++;
+    const w = new BinaryWriter().flexInt(id).string(typeName).flexInt(members.length);
+    for (const m of members) w.string(m.name).integer(m.propType);
+    this.transport.send(encodeRequest(Cmd.DEFTYPE, w.toBuffer(), null));
+    this.clientTypes.set(typeName, { id, schema });
     return id;
   }
 
