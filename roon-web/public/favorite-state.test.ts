@@ -30,3 +30,12 @@ test('unknown favorite state cannot be toggled as if it were false', () => {
   assert.equal(state.begin('42'), null);
   assert.deepEqual(state.view('42'), { favorite: undefined, pending: false });
 });
+
+test('session reset clears pending and confirmed entity state', () => {
+  const state = new FavoriteState();
+  state.seed('42', true);
+  state.begin('42');
+
+  state.reset();
+  assert.deepEqual(state.view('42'), { favorite: undefined, pending: false });
+});

@@ -22,3 +22,29 @@ protocol, but makes each state transition explicit and testable.
 No SDK production files, generated APIs, safety confirmations, or dependencies
 will change. The legacy exported `Arg.refList` cleanup remains outside this web
 work.
+
+## Review follow-up
+
+The first recovery pass replaced the dead backend client, but did not invalidate
+the browser's object ids. The follow-up makes the Core session an explicit part
+of every entity-bearing exchange.
+
+1. Add a monotonically increasing generation to the client pool. Close a
+   candidate whose `connect()` rejects, retain identity guards around its late
+   close callback, and expose an atomic `{ client, generation }` session read.
+2. Include the generation in snapshots, library/search responses, and browser
+   entity commands. Reject commands before dispatch when their generation does
+   not match the current session, so an old album, zone, or endpoint id never
+   reaches a replacement `RoonClient`.
+3. Reset all browser entity and pending-favorite state when the WebSocket closes
+   or a different Core generation arrives. Reconnect by requesting a fresh
+   snapshot and reloading the library; re-run only the current valid search.
+4. Extend regressions through the real app event wiring with a small injected
+   browser fixture: verify disconnect clears pending favorites, generation
+   changes remove old controls, and stale results/actions cannot cross sessions.
+5. Keep request-id isolation around SDK search results. Cover concurrent and
+   repeated same-query responses as distinct returned identity sets; the SDK
+   owns callback-root membership and list decoding.
+
+No Core calls, SDK production edits, workflow edits, dependencies, or changes to
+the existing confirmation gates are part of this follow-up.

@@ -39,4 +39,8 @@ export class FavoriteState {
       ? { favorite: entry.favorite, pending: false }
       : { favorite: entry.favorite, pending: true, target: entry.target };
   }
+
+  reset(): void {
+    this.entries.clear();
+  }
 }

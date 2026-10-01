@@ -12,6 +12,7 @@ const SERVER_BROKER_ID = Buffer.from(
 
 interface ConnectableClient {
   connect(): Promise<void>;
+  close(): void;
   conn: object;
 }
 
@@ -22,6 +23,17 @@ interface CloseAwareConnection {
 export interface RoonHealth {
   connected: boolean;
   connecting: boolean;
+  generation: number | null;
+}
+
+export interface RoonSession<T> {
+  client: T;
+  generation: number;
+}
+
+export interface RoonSessionChange {
+  connected: boolean;
+  generation: number;
 }
 
 /**
@@ -30,13 +42,19 @@ export interface RoonHealth {
  * session ids all belong to the socket on which it was created.
  */
 export class RoonPool<T extends ConnectableClient> {
-  private active: T | null = null;
-  private connecting: Promise<T> | null = null;
+  private active: RoonSession<T> | null = null;
+  private connecting: Promise<RoonSession<T>> | null = null;
   private connectingToken: symbol | null = null;
+  private nextGeneration = 1;
+  private readonly listeners = new Set<(change: RoonSessionChange) => void>();
 
   constructor(private readonly create: () => T) {}
 
-  get(): Promise<T> {
+  async get(): Promise<T> {
+    return (await this.getSession()).client;
+  }
+
+  getSession(): Promise<RoonSession<T>> {
     if (this.active) return Promise.resolve(this.active);
     if (this.connecting) return this.connecting;
 
@@ -50,7 +68,11 @@ export class RoonPool<T extends ConnectableClient> {
         sdkOnclosed.call(conn);
       } finally {
         closed = true;
-        if (this.active === candidate) this.active = null;
+        if (this.active?.client === candidate) {
+          const { generation } = this.active;
+          this.active = null;
+          this.emit({ connected: false, generation });
+        }
       }
     };
 
@@ -58,10 +80,17 @@ export class RoonPool<T extends ConnectableClient> {
     this.connectingToken = token;
     const attempt = (async () => {
       try {
-        await candidate.connect();
+        // Defer invocation so even a synchronous connect() throw cannot race
+        // the assignment of this attempt into the coalescing slot below.
+        await Promise.resolve().then(() => candidate.connect());
         if (closed) throw new Error('broker connection closed while connecting');
-        this.active = candidate;
-        return candidate;
+        const session = { client: candidate, generation: this.nextGeneration++ };
+        this.active = session;
+        this.emit({ connected: true, generation: session.generation });
+        return session;
+      } catch (error) {
+        try { candidate.close(); } catch { /* retain the setup failure */ }
+        throw error;
       } finally {
         if (this.connectingToken === token) {
           this.connecting = null;
@@ -74,11 +103,30 @@ export class RoonPool<T extends ConnectableClient> {
   }
 
   current(): T | null {
+    return this.active?.client ?? null;
+  }
+
+  currentSession(): RoonSession<T> | null {
     return this.active;
   }
 
   health(): RoonHealth {
-    return { connected: this.active !== null, connecting: this.connecting !== null };
+    return {
+      connected: this.active !== null,
+      connecting: this.connecting !== null,
+      generation: this.active?.generation ?? null,
+    };
+  }
+
+  onChange(listener: (change: RoonSessionChange) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(change: RoonSessionChange): void {
+    for (const listener of this.listeners) {
+      try { listener(change); } catch { /* observers cannot break ownership */ }
+    }
   }
 }
 
@@ -90,10 +138,22 @@ export async function getRoon(): Promise<RoonClient> {
   return pool.get();
 }
 
+export function getRoonSession(): Promise<RoonSession<RoonClient>> {
+  return pool.getSession();
+}
+
 export function currentRoon(): RoonClient | null {
   return pool.current();
 }
 
+export function currentRoonSession(): RoonSession<RoonClient> | null {
+  return pool.currentSession();
+}
+
 export function roonHealth(): RoonHealth {
   return pool.health();
+}
+
+export function onRoonSessionChange(listener: (change: RoonSessionChange) => void): () => void {
+  return pool.onChange(listener);
 }

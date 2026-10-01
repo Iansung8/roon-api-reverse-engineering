@@ -56,9 +56,12 @@ export async function search(roon: RoonClient, q: string): Promise<SearchResult>
     seen.add(key);
     if (o.typeName.endsWith('AlbumLite') || o.typeName.endsWith('.Album'))
       albums.push({ oid: key, title: cleanLinks(name), artist: artistOf(o), favorite: favoriteOf(o) });
-    else if (o.typeName.endsWith('TrackLite')) tracks.push({ oid: key, title: cleanLinks(name) });
-    else if (o.typeName.endsWith('PerformerLite')) artists.push({ oid: key, name: cleanLinks(name) });
-    else if (o.typeName.endsWith('WorkLite')) works.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('TrackLite') || o.typeName.endsWith('.Track'))
+      tracks.push({ oid: key, title: cleanLinks(name) });
+    else if (o.typeName.endsWith('PerformerLite') || o.typeName.endsWith('.Performer'))
+      artists.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('WorkLite') || o.typeName.endsWith('.Work'))
+      works.push({ oid: key, name: cleanLinks(name) });
   }
 
   return {

@@ -7,9 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { getRoon, roonHealth } from './roon';
+import { getRoonSession, onRoonSessionChange, roonHealth } from './roon';
 import { snapshot } from './state';
 import { search, library, transport, setVolume, favorite, play, power } from './bridge';
+import { messageMatchesSession } from './session';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url)); // dist/
 const PUBLIC = path.resolve(__dirname, '..', 'public');
@@ -71,7 +72,7 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/api/health') {
     try {
-      const roon = await getRoon();
+      const { client: roon } = await getRoonSession();
       return json(res, 200, {
         ...roonHealth(),
         objects: roon.graph.objects.size,
@@ -85,8 +86,8 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/api/snapshot') {
     try {
-      const roon = await getRoon();
-      return json(res, 200, snapshot(roon));
+      const { client: roon, generation } = await getRoonSession();
+      return json(res, 200, { generation, ...snapshot(roon) });
     } catch (e) {
       return json(res, 503, { error: (e as Error).message });
     }
@@ -94,8 +95,8 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/api/library') {
     try {
-      const roon = await getRoon();
-      return json(res, 200, library(roon));
+      const { client: roon, generation } = await getRoonSession();
+      return json(res, 200, { generation, ...library(roon) });
     } catch (e) {
       return json(res, 503, { error: (e as Error).message });
     }
@@ -125,8 +126,8 @@ const wss = new WebSocketServer({ server });
 async function pushSnapshot(target?: WebSocket) {
   let payload: string;
   try {
-    const roon = await getRoon();
-    payload = JSON.stringify({ t: 'snapshot', ...snapshot(roon) });
+    const { client: roon, generation } = await getRoonSession();
+    payload = JSON.stringify({ t: 'snapshot', generation, ...snapshot(roon) });
   } catch (e) {
     payload = JSON.stringify({ t: 'error', msg: (e as Error).message });
   }
@@ -139,53 +140,66 @@ wss.on('connection', (ws) => {
   pushSnapshot(ws);
   ws.on('message', async (data) => {
     let msg: any;
+    let requestGeneration: number | null = null;
     try {
       msg = JSON.parse(data.toString());
     } catch {
       return;
     }
     try {
-      const roon = await getRoon();
+      const { client: roon, generation } = await getRoonSession();
+      requestGeneration = generation;
+      if (!messageMatchesSession(msg, generation)) {
+        ws.send(JSON.stringify({ t: 'sessionMismatch', generation }));
+        pushSnapshot(ws);
+        return;
+      }
       if (msg.t === 'snapshot') {
         pushSnapshot(ws);
       } else if (msg.t === 'search') {
         const id = Number.isSafeInteger(msg.id) ? msg.id : null;
         const q = String(msg.q ?? '').trim();
         const results = await search(roon, q);
-        ws.send(JSON.stringify({ t: 'searchResults', id, q, ...results }));
+        ws.send(JSON.stringify({ t: 'searchResults', id, q, generation, ...results }));
       } else if (msg.t === 'transport') {
         const r = transport(roon, String(msg.zone), String(msg.action));
-        ws.send(JSON.stringify({ t: 'result', action: 'transport', ...r }));
+        ws.send(JSON.stringify({ t: 'result', action: 'transport', generation, ...r }));
         setTimeout(() => pushSnapshot(), 400);
       } else if (msg.t === 'volume') {
         const r = await setVolume(roon, String(msg.endpoint), Number(msg.value));
-        ws.send(JSON.stringify({ t: 'result', action: 'volume', ...r }));
+        ws.send(JSON.stringify({ t: 'result', action: 'volume', generation, ...r }));
         setTimeout(() => pushSnapshot(), 400);
       } else if (msg.t === 'favorite') {
         const r = await favorite(roon, String(msg.oid), !!msg.on);
-        ws.send(JSON.stringify({ t: 'result', action: 'favorite', oid: msg.oid, on: msg.on, ...r }));
+        ws.send(JSON.stringify({ t: 'result', action: 'favorite', oid: msg.oid, on: msg.on, generation, ...r }));
       } else if (msg.t === 'play') {
         // Audio-producing: require explicit confirmation from the UI.
         if (!msg.confirm) throw new Error('play requires confirm:true');
         const r = await play(roon, String(msg.zone), msg.kind === 'track' ? 'track' : 'album', String(msg.oid));
-        ws.send(JSON.stringify({ t: 'result', action: 'play', ...r }));
+        ws.send(JSON.stringify({ t: 'result', action: 'play', generation, ...r }));
         setTimeout(() => pushSnapshot(), 600);
       } else if (msg.t === 'power') {
         // Device power on/off: require explicit confirmation from the UI.
         if (!msg.confirm) throw new Error('power requires confirm:true');
         const r = await power(roon, String(msg.endpoint), !!msg.on);
-        ws.send(JSON.stringify({ t: 'result', action: 'power', ...r }));
+        ws.send(JSON.stringify({ t: 'result', action: 'power', generation, ...r }));
         setTimeout(() => pushSnapshot(), 600);
       }
     } catch (e) {
       const error = (e as Error).message;
       if (msg.t === 'favorite') {
-        ws.send(JSON.stringify({ t: 'result', action: 'favorite', oid: String(msg.oid), on: !!msg.on, ok: false, status: error }));
+        ws.send(JSON.stringify({ t: 'result', action: 'favorite', oid: String(msg.oid), on: !!msg.on, generation: requestGeneration, ok: false, status: error }));
       } else {
         ws.send(JSON.stringify({ t: 'error', msg: error }));
       }
     }
   });
+});
+
+onRoonSessionChange((change) => {
+  if (change.connected) return;
+  const payload = JSON.stringify({ t: 'sessionClosed', generation: change.generation });
+  for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(payload);
 });
 
 // Periodic state refresh so the UI reflects now-playing/zone changes.
@@ -198,6 +212,6 @@ server.listen(PORT, () => {
 });
 
 // Connect to the core on boot (read-only); log status.
-getRoon()
-  .then((r) => console.log(`connected to core — ${r.graph.objects.size} objects loaded`))
+getRoonSession()
+  .then(({ client }) => console.log(`connected to core — ${client.graph.objects.size} objects loaded`))
   .catch((e) => console.error('roon connect failed (will retry on request):', (e as Error).message));

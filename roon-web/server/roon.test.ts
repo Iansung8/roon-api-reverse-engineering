@@ -6,11 +6,18 @@ class FakeClient {
   conn = { onclosed: () => { this.originalCloseCalls += 1; } };
   originalCloseCalls = 0;
   connectCalls = 0;
+  closeCalls = 0;
   connectImpl: () => Promise<void> = async () => {};
+  closeImpl: () => void = () => { this.conn.onclosed(); };
 
   connect(): Promise<void> {
     this.connectCalls += 1;
     return this.connectImpl();
+  }
+
+  close(): void {
+    this.closeCalls += 1;
+    this.closeImpl();
   }
 }
 
@@ -31,26 +38,31 @@ test('coalesces concurrent connects onto one fresh client', async () => {
     return client;
   });
 
-  const first = pool.get();
-  const second = pool.get();
+  const first = pool.getSession();
+  const second = pool.getSession();
   assert.equal(clients.length, 1);
   gate.resolve();
-  assert.equal(await first, await second);
+  const firstSession = await first;
+  const secondSession = await second;
+  assert.equal(firstSession.client, secondSession.client);
+  assert.equal(firstSession.generation, 1);
+  assert.equal(secondSession.generation, 1);
   assert.equal(clients[0].connectCalls, 1);
-  assert.deepEqual(pool.health(), { connected: true, connecting: false });
+  assert.deepEqual(pool.health(), { connected: true, connecting: false, generation: 1 });
 });
 
 test('failed recovery clears connecting state and allows a fresh client', async () => {
   const clients: FakeClient[] = [];
   const pool = new RoonPool(() => {
     const client = new FakeClient();
-    if (clients.length === 0) client.connectImpl = async () => { throw new Error('core unavailable'); };
+    if (clients.length === 0) client.connectImpl = () => { throw new Error('core unavailable'); };
     clients.push(client);
     return client;
   });
 
   await assert.rejects(pool.get(), /core unavailable/);
-  assert.deepEqual(pool.health(), { connected: false, connecting: false });
+  assert.equal(clients[0].closeCalls, 1);
+  assert.deepEqual(pool.health(), { connected: false, connecting: false, generation: null });
   const recovered = await pool.get();
   assert.equal(recovered, clients[1]);
 });
@@ -67,11 +79,12 @@ test('terminal close preserves the SDK callback and recovers with a fresh client
   first.conn.onclosed();
   assert.equal(first.originalCloseCalls, 1);
   assert.equal(pool.current(), null);
-  assert.deepEqual(pool.health(), { connected: false, connecting: false });
+  assert.deepEqual(pool.health(), { connected: false, connecting: false, generation: null });
 
   const second = await pool.get();
   assert.notEqual(second, first);
   assert.equal(clients.length, 2);
+  assert.equal(pool.currentSession()?.generation, 2);
 });
 
 test('a late close callback from an old client cannot evict the current client', async () => {
@@ -87,7 +100,7 @@ test('a late close callback from an old client cannot evict the current client',
   const second = await pool.get();
   first.conn.onclosed();
   assert.equal(pool.current(), second);
-  assert.deepEqual(pool.health(), { connected: true, connecting: false });
+  assert.deepEqual(pool.health(), { connected: true, connecting: false, generation: 2 });
 });
 
 test('a client that closes before connect settles is never published', async () => {
@@ -107,4 +120,40 @@ test('a client that closes before connect settles is never published', async () 
   await assert.rejects(pending, /closed while connecting/);
   assert.equal(pool.current(), null);
   assert.ok(await pool.get());
+});
+
+test('post-handshake setup rejection closes the candidate before retry', async () => {
+  const clients: FakeClient[] = [];
+  const pool = new RoonPool(() => {
+    const client = new FakeClient();
+    if (clients.length === 0) client.connectImpl = async () => { throw new Error('getService failed'); };
+    clients.push(client);
+    return client;
+  });
+
+  await assert.rejects(pool.getSession(), /getService failed/);
+  assert.equal(clients[0].closeCalls, 1);
+  assert.equal(pool.currentSession(), null);
+  const recovered = await pool.getSession();
+  assert.equal(recovered.client, clients[1]);
+  assert.equal(recovered.generation, 1);
+});
+
+test('a delayed close from a failed candidate cannot clear later ownership', async () => {
+  const clients: FakeClient[] = [];
+  const pool = new RoonPool(() => {
+    const client = new FakeClient();
+    if (clients.length === 0) {
+      client.connectImpl = async () => { throw new Error('setup failed'); };
+      client.closeImpl = () => {};
+    }
+    clients.push(client);
+    return client;
+  });
+
+  await assert.rejects(pool.getSession(), /setup failed/);
+  const recovered = await pool.getSession();
+  clients[0].conn.onclosed();
+  assert.equal(pool.currentSession()?.client, recovered.client);
+  assert.equal(pool.currentSession()?.generation, recovered.generation);
 });

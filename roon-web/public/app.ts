@@ -36,6 +36,8 @@ let ws: WebSocket;
 let lastZones: Zone[] = [];
 let targetZone = '';
 let catalog: Catalog | null = null;
+let coreGeneration: number | null = null;
+let loadedLibraryGeneration: number | null = null;
 const favoriteStates = new FavoriteState();
 const searchState = new SearchState();
 
@@ -46,6 +48,8 @@ const send = (m: object): boolean => {
   ws.send(JSON.stringify(m));
   return true;
 };
+const sendForSession = (m: object): boolean =>
+  coreGeneration !== null && send({ ...m, generation: coreGeneration });
 function toast(text: string, kind: 'ok' | 'err' = 'ok') {
   const t = document.createElement('div');
   t.className = `toast ${kind}`; t.textContent = text; document.body.appendChild(t);
@@ -114,7 +118,7 @@ function skeleton() {
       $('search-results').innerHTML = '';
       return;
     }
-    timer = window.setTimeout(() => send({ t: 'search', ...next.request }), 250);
+    timer = window.setTimeout(() => sendForSession({ t: 'search', ...next.request }), 250);
   });
   ($('target') as HTMLSelectElement).addEventListener('change', (e) => { targetZone = (e.target as HTMLSelectElement).value; });
 
@@ -127,13 +131,13 @@ function skeleton() {
     const el = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
     if (!el) return;
     const a = el.dataset.action!;
-    if (a === 'transport') send({ t: 'transport', zone: el.dataset.zone, action: el.dataset.tact });
+    if (a === 'transport') sendForSession({ t: 'transport', zone: el.dataset.zone, action: el.dataset.tact });
     else if (a === 'favorite') {
       const oid = el.dataset.oid!;
       const on = favoriteStates.begin(oid);
       if (on === null) return;
       updateFavoriteButtons(oid);
-      if (!send({ t: 'favorite', oid, on })) {
+      if (!sendForSession({ t: 'favorite', oid, on })) {
         favoriteStates.settle(oid, false);
         updateFavoriteButtons(oid);
         toast('favorite: disconnected', 'err');
@@ -144,17 +148,17 @@ function skeleton() {
       const zname = lastZones.find((z) => z.oid === zone)?.name ?? 'zone';
       if (!zone) return toast('no zone available', 'err');
       if (confirm(`Play "${el.dataset.title}" on ${zname}? (this will produce audio)`))
-        send({ t: 'play', zone, kind: el.dataset.kind, oid: el.dataset.oid, confirm: true });
+        sendForSession({ t: 'play', zone, kind: el.dataset.kind, oid: el.dataset.oid, confirm: true });
     } else if (a === 'power') {
       const on = el.dataset.on !== '1'; // toggling
       if (confirm(`${on ? 'Power on' : 'Standby'} "${el.dataset.name}"?`))
-        send({ t: 'power', endpoint: el.dataset.endpoint, on, confirm: true });
+        sendForSession({ t: 'power', endpoint: el.dataset.endpoint, on, confirm: true });
     }
   });
   // volume sliders
   appEl.addEventListener('change', (e) => {
     const el = e.target as HTMLInputElement;
-    if (el.classList.contains('vol')) send({ t: 'volume', endpoint: el.dataset.endpoint, value: Number(el.value) });
+    if (el.classList.contains('vol')) sendForSession({ t: 'volume', endpoint: el.dataset.endpoint, value: Number(el.value) });
   });
 }
 
@@ -268,15 +272,69 @@ function renderSearch(r: SearchResults) {
   </div>`;
 }
 
+function clearEntityUi(): void {
+  favoriteStates.reset();
+  lastZones = [];
+  targetZone = '';
+  coreGeneration = null;
+  loadedLibraryGeneration = null;
+  $('zones-count').textContent = '0';
+  $('dev-count').textContent = '0';
+  $('lib-count').textContent = '0';
+  $('zones').innerHTML = '<p class="muted">reconnecting…</p>';
+  $('devices').innerHTML = '';
+  $('library').innerHTML = '<p class="muted">reconnecting…</p>';
+  $('search-results').innerHTML = '';
+  appEl.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((button) => { button.disabled = true; });
+}
+
+function restartCurrentSearch(): void {
+  const next = searchState.input(($('q') as HTMLInputElement).value);
+  if (next.clear) {
+    $('search-results').innerHTML = '';
+    return;
+  }
+  sendForSession({ t: 'search', ...next.request });
+}
+
+function acceptSnapshot(msg: { generation: number; zones: Zone[]; devices: Device[] }): void {
+  if (!Number.isSafeInteger(msg.generation)) return;
+  const changed = coreGeneration !== msg.generation;
+  if (changed) clearEntityUi();
+  coreGeneration = msg.generation;
+  statusEl.textContent = 'connected';
+  statusEl.className = 'status ok';
+  renderZones(msg.zones);
+  renderDevices(msg.devices);
+  if (loadedLibraryGeneration !== msg.generation) {
+    loadedLibraryGeneration = msg.generation;
+    void loadLibrary(msg.generation);
+    restartCurrentSearch();
+  }
+}
+
 function connectWs() {
   ws = new WebSocket(`ws://${location.host}`);
-  ws.onopen = () => { statusEl.textContent = 'connected'; statusEl.className = 'status ok'; };
-  ws.onclose = () => { statusEl.textContent = 'reconnecting…'; statusEl.className = 'status err'; setTimeout(connectWs, 1500); };
+  ws.onopen = () => { statusEl.textContent = 'core connecting…'; statusEl.className = 'status'; };
+  ws.onclose = () => {
+    clearEntityUi();
+    statusEl.textContent = 'reconnecting…';
+    statusEl.className = 'status err';
+    setTimeout(connectWs, 1500);
+  };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.t === 'snapshot') { renderZones(msg.zones); renderDevices(msg.devices); }
-    else if (msg.t === 'searchResults' && searchState.accept(msg.id, msg.q)) renderSearch(msg as SearchResults);
-    else if (msg.t === 'result') {
+    if (msg.t === 'snapshot') acceptSnapshot(msg);
+    else if (msg.t === 'sessionClosed' || msg.t === 'sessionMismatch') {
+      if (msg.t === 'sessionMismatch' || msg.generation === coreGeneration) {
+        clearEntityUi();
+        statusEl.textContent = 'core reconnecting…';
+        statusEl.className = 'status err';
+        send({ t: 'snapshot' });
+      }
+    }
+    else if (msg.t === 'searchResults' && msg.generation === coreGeneration && searchState.accept(msg.id, msg.q)) renderSearch(msg as SearchResults);
+    else if (msg.t === 'result' && msg.generation === coreGeneration) {
       if (msg.action === 'favorite' && typeof msg.oid === 'string') {
         favoriteStates.settle(msg.oid, !!msg.ok);
         updateFavoriteButtons(msg.oid);
@@ -325,9 +383,10 @@ async function loadCatalog() {
   } catch { $('api-list').innerHTML = '<p class="muted">failed to load catalog</p>'; }
 }
 
-async function loadLibrary() {
+async function loadLibrary(generation: number) {
   try {
     const lib = await (await fetch('/api/library')).json();
+    if (generation !== coreGeneration || lib.generation !== generation) return;
     $('lib-count').textContent = String(lib.albums.length);
     $('library').innerHTML = albumGrid(lib.albums, 'no albums loaded');
   } catch { /* ignore */ }
@@ -335,5 +394,4 @@ async function loadLibrary() {
 
 skeleton();
 connectWs();
-loadLibrary();
 loadCatalog();

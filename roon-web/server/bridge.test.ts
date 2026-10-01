@@ -35,6 +35,9 @@ test('search maps only the current UnifiedSearch result identities', async () =>
     { ...object(11n, 'Current Track'), typeName: 'Sooloos.Broker.Api.TrackLite' },
     { ...object(12n, 'Current Artist'), typeName: 'Sooloos.Broker.Api.PerformerLite' },
     { ...object(13n, 'Current Work'), typeName: 'Sooloos.Broker.Api.WorkLite' },
+    { ...object(14n, 'Full Track'), typeName: 'Sooloos.Broker.Api.Track' },
+    { ...object(15n, 'Full Artist'), typeName: 'Sooloos.Broker.Api.Performer' },
+    { ...object(16n, 'Full Work'), typeName: 'Sooloos.Broker.Api.Work' },
   ];
   const roon = {
     search: async (q: string) => {
@@ -49,17 +52,22 @@ test('search maps only the current UnifiedSearch result identities', async () =>
 
   const result = await search(roon as never, ' current query ');
   assert.deepEqual(result.albums.map((row) => row.oid), ['10']);
-  assert.deepEqual(result.tracks.map((row) => row.oid), ['11']);
-  assert.deepEqual(result.artists.map((row) => row.oid), ['12']);
-  assert.deepEqual(result.works.map((row) => row.oid), ['13']);
+  assert.deepEqual(result.tracks.map((row) => row.oid), ['11', '14']);
+  assert.deepEqual(result.artists.map((row) => row.oid), ['12', '15']);
+  assert.deepEqual(result.works.map((row) => row.oid), ['13', '16']);
 });
 
-test('a repeated term does not reuse identities absent from the current SDK graph diff', async () => {
-  let call = 0;
+test('concurrent repeated terms retain each SDK callback result identity set', async () => {
+  const pending: Array<(objects: RoonObject[]) => void> = [];
   const roon = {
-    search: async () => call++ === 0 ? [object(1n, 'First result')] : [],
+    search: () => new Promise<RoonObject[]>((resolve) => pending.push(resolve)),
   };
 
-  assert.deepEqual((await search(roon as never, 'same')).albums.map((row) => row.oid), ['1']);
-  assert.deepEqual((await search(roon as never, 'same')).albums, []);
+  const first = search(roon as never, 'same');
+  const second = search(roon as never, 'same');
+  pending[1]([object(2n, 'Second callback')]);
+  pending[0]([object(1n, 'First callback')]);
+
+  assert.deepEqual((await second).albums.map((row) => row.oid), ['2']);
+  assert.deepEqual((await first).albums.map((row) => row.oid), ['1']);
 });
