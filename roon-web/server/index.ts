@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { getRoon } from './roon';
+import { getRoon, roonHealth } from './roon';
 import { snapshot } from './state';
 import { search, library, transport, setVolume, favorite, play, power } from './bridge';
 
@@ -73,13 +73,13 @@ const server = http.createServer(async (req, res) => {
     try {
       const roon = await getRoon();
       return json(res, 200, {
-        connected: true,
+        ...roonHealth(),
         objects: roon.graph.objects.size,
         types: roon.graph.types.size,
         library: roon.graph.findByType('Library')[0]?.oid.toString() ?? null,
       });
     } catch (e) {
-      return json(res, 503, { connected: false, error: (e as Error).message });
+      return json(res, 503, { ...roonHealth(), error: (e as Error).message });
     }
   }
 
