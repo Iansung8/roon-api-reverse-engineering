@@ -150,3 +150,29 @@ describe('IEnumerable collection encoding', () => {
     expect(r.flexInt()).toBe(1); // FavoriteBanState.Favorite
   });
 });
+
+describe('legacy reference-list encoding', () => {
+  const framedRefs = (oids: (bigint | number)[]) =>
+    buildArgs([Arg.collection(oids.map((oid) => buildArgs([Arg.ref(oid)])))]);
+
+  test('Arg.refList matches the framed empty bare-reference collection', () => {
+    expect(buildArgs([Arg.refList([])])).toEqual(framedRefs([]));
+  });
+
+  test('Arg.refList matches the framed multi-reference collection', () => {
+    const oids = [1n, 127n, 128n];
+    const legacy = buildArgs([Arg.refList(oids)]);
+
+    expect(legacy).toEqual(framedRefs(oids));
+  });
+
+  test('Arg.refList framing preserves the following argument boundary', () => {
+    const args = buildArgs([Arg.refList([1n, 128n]), Arg.enum_(7)]);
+    const expected = Buffer.concat([
+      framedRefs([1n, 128n]),
+      buildArgs([Arg.enum_(7)]),
+    ]);
+
+    expect(args).toEqual(expected);
+  });
+});

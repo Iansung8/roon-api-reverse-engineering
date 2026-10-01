@@ -11,10 +11,10 @@
  *   - byte[]          -> integer(len) + bytes         (Arg.bytes)
  *   - IEnumerable<T>  -> flexInt(bodyLen) + flexInt(count) + serialized elements
  *                        (Arg.collection; elements are e.g. inlineStruct buffers)
- *   - IEnumerable<ref>-> integer(count) + refs        (Arg.refList)
- *     CAUTION: refList is NOT a valid encoding for struct-typed collection
- *     params (IEnumerable<AlbumBase> and friends) — the server stalls on it.
- *     Those want Arg.collection of inline value structs; see favoriteAlbum.
+ *   - IEnumerable<ref>-> the same framing, with each element a bare reference
+ *                        (Arg.collection of Arg.ref buffers)
+ *   - Arg.refList     -> deprecated compatibility helper for that bare-reference
+ *                        collection encoding
  *   - ResultCallback  -> omitted (response travels via the request id)
  */
 import { BinaryWriter } from './writer';
@@ -35,6 +35,10 @@ export type Arg =
 export const Arg = {
   sooid: (value: Uint8Array): Arg => ({ kind: 'sooid', value }),
   ref: (oid: bigint | number): Arg => ({ kind: 'ref', oid }),
+  /**
+   * @deprecated Use `Arg.collection(oids.map((oid) => buildArgs([Arg.ref(oid)])))`
+   * to make the element encoding explicit.
+   */
   refList: (oids: (bigint | number)[]): Arg => ({ kind: 'refList', oids }),
   /** Length-prefixed collection of pre-serialized elements (IEnumerable<T> of structs). */
   collection: (elements: Buffer[]): Arg => ({ kind: 'collection', elements }),
@@ -122,10 +126,14 @@ function writeArg(w: BinaryWriter, a: Arg): void {
     case 'ref':
       w.long(a.oid); // by-ref object => its object id (flexlong); 0 = null
       break;
-    case 'refList':
-      w.integer(a.oids.length);
-      for (const oid of a.oids) w.long(oid);
+    case 'refList': {
+      // Match Arg.collection with each element encoded as a bare reference.
+      const inner = new BinaryWriter().flexInt(a.oids.length);
+      for (const oid of a.oids) inner.long(oid);
+      const body = inner.toBuffer();
+      w.flexInt(body.length).bytes(body);
       break;
+    }
     case 'collection': {
       // Captured wire format (validated byte-for-byte against the official
       // client's FavoriteOrBan): flexInt(bodyLen) + flexInt(count) + elements.
