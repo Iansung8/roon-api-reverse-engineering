@@ -4,6 +4,7 @@
  * (confirm) — on top of zones/devices/search/library.
  */
 import { FavoriteState } from './favorite-state';
+import { SearchState } from './search-state';
 
 interface Zone {
   oid: string; name: string; state?: number; stateLabel: string; seekPosition?: number;
@@ -17,7 +18,10 @@ interface Device {
 interface AlbumRow { oid: string; title: string; artist?: string; favorite?: boolean }
 interface TrackRow { oid: string; title: string }
 interface NamedRow { oid: string; name: string }
-interface SearchResults { albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[]; genres: NamedRow[]; tracks: TrackRow[]; loaded: number }
+interface SearchResults {
+  id: number; q: string; albums: AlbumRow[]; artists: NamedRow[]; playlists: NamedRow[];
+  genres: NamedRow[]; tracks: TrackRow[]; works: NamedRow[];
+}
 interface ApiMethod { name: string; signature: string; params: { name: string; type: string }[]; response: boolean }
 interface ApiService { name: string; methods: ApiMethod[] }
 interface Catalog { source: string; serviceCount: number; methodCount: number; services: ApiService[] }
@@ -33,6 +37,7 @@ let lastZones: Zone[] = [];
 let targetZone = '';
 let catalog: Catalog | null = null;
 const favoriteStates = new FavoriteState();
+const searchState = new SearchState();
 
 const esc = (s: string) => (s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const fmtTime = (s?: number) => (s == null ? '' : `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`);
@@ -103,8 +108,13 @@ function skeleton() {
   const q = $('q') as HTMLInputElement;
   let timer: number | undefined;
   q.addEventListener('input', () => {
-    const v = q.value; clearTimeout(timer);
-    timer = window.setTimeout(() => { if (v.trim().length >= 2) send({ t: 'search', q: v }); }, 250);
+    clearTimeout(timer);
+    const next = searchState.input(q.value);
+    if (next.clear) {
+      $('search-results').innerHTML = '';
+      return;
+    }
+    timer = window.setTimeout(() => send({ t: 'search', ...next.request }), 250);
   });
   ($('target') as HTMLSelectElement).addEventListener('change', (e) => { targetZone = (e.target as HTMLSelectElement).value; });
 
@@ -239,22 +249,22 @@ function namedList(rows: NamedRow[]): string {
 }
 
 function renderSearch(r: SearchResults) {
-  const total = r.albums.length + r.artists.length + r.playlists.length + r.genres.length + r.tracks.length;
+  const total = r.albums.length + r.artists.length + r.playlists.length + r.genres.length + r.tracks.length + r.works.length;
   const sec = (label: string, n: number, body: string) =>
     n ? `<div class="sub-head">${label} <span class="count">${n}</span></div>${body}` : '';
   $('search-results').innerHTML = `<div class="card">
-    ${total === 0 ? '<p class="muted">no matches in the loaded working set</p>' : ''}
+    ${total === 0 ? '<p class="muted">no matches</p>' : ''}
     ${sec('Albums', r.albums.length, albumGrid(r.albums, ''))}
     ${sec('Artists', r.artists.length, namedList(r.artists))}
+    ${sec('Works', r.works.length, namedList(r.works))}
     ${sec('Tracks', r.tracks.length, `<table><tbody>${r.tracks.map((t) => `<tr>
         <td>${esc(t.title)}</td>
         <td class="num"><button class="tbtn" data-action="play" data-kind="track" data-oid="${t.oid}" data-title="${esc(t.title)}">▶</button></td>
       </tr>`).join('')}</tbody></table>`)}
     ${sec('Playlists', r.playlists.length, namedList(r.playlists))}
     ${sec('Genres', r.genres.length, namedList(r.genres))}
-    <p class="muted small note">Searches the ${r.loaded.toLocaleString()} objects the core has loaded
-      this session — not the full catalog. Full-library search needs the reactive query
-      subsystem (see <code>docs/plans/2026-06-12-search-root-cause.md</code>).</p>
+    <p class="muted small note">Results come from the Core's UnifiedSearch response for this request.
+      Available result kinds depend on what the Core returns.</p>
   </div>`;
 }
 
@@ -265,7 +275,7 @@ function connectWs() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.t === 'snapshot') { renderZones(msg.zones); renderDevices(msg.devices); }
-    else if (msg.t === 'searchResults') renderSearch(msg as SearchResults);
+    else if (msg.t === 'searchResults' && searchState.accept(msg.id, msg.q)) renderSearch(msg as SearchResults);
     else if (msg.t === 'result') {
       if (msg.action === 'favorite' && typeof msg.oid === 'string') {
         favoriteStates.settle(msg.oid, !!msg.ok);

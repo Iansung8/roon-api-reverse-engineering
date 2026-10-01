@@ -149,8 +149,10 @@ wss.on('connection', (ws) => {
       if (msg.t === 'snapshot') {
         pushSnapshot(ws);
       } else if (msg.t === 'search') {
-        const results = await search(roon, String(msg.q ?? ''));
-        ws.send(JSON.stringify({ t: 'searchResults', q: msg.q, ...results }));
+        const id = Number.isSafeInteger(msg.id) ? msg.id : null;
+        const q = String(msg.q ?? '').trim();
+        const results = await search(roon, q);
+        ws.send(JSON.stringify({ t: 'searchResults', id, q, ...results }));
       } else if (msg.t === 'transport') {
         const r = transport(roon, String(msg.zone), String(msg.action));
         ws.send(JSON.stringify({ t: 'result', action: 'transport', ...r }));
