@@ -1,6 +1,6 @@
 {
   "name": "roon-internal-api",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript client for Roon's internal binary protocol on port 9332",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
