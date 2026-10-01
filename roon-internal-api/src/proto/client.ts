@@ -159,7 +159,9 @@ export class RoonClient {
    * Resolve only the callback's result graph. TopSearchResults keep the Core's
    * ranking, followed by highlighted albums and category lists in a stable
    * order. Version lists preserve their order; repeated OIDs appear once.
-   * Opt in to playlist and genre hits with includePlaylistsAndGenres.
+   * Opt in to playlist and genre hits with includePlaylistsAndGenres. Their
+   * lists follow ranked hits/highlights and precede broad categories so large
+   * performer lists do not consume the entire result limit first.
    */
   async search(terms: string, maxCount = 50, includePlaylistsAndGenres = false): Promise<RoonObject[]> {
     const params = this.structArg('Sooloos.Broker.Api.SearchParameters', [
@@ -224,7 +226,7 @@ export class RoonClient {
     const leaves = new Set(['AlbumLite', 'TrackLite', 'PerformerLite', 'WorkLite',
       'Album', 'Track', 'Performer', 'Work']);
     if (includePlaylistsAndGenres) {
-      rootMembers.push('Playlists', 'Genres');
+      rootMembers.splice(3, 0, 'Playlists', 'Genres');
       for (const type of ['Playlist', 'BrowserGenre', 'GenreLite']) leaves.add(type);
     }
     const seen = new Set<bigint>();

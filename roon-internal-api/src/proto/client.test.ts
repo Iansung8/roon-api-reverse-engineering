@@ -339,7 +339,7 @@ describe('UnifiedSearch', () => {
     seed(c, 104n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.BrowserGenre>', {
       $count: 3, $items: [{ $ref: 905n }, { $ref: 904n }, { $ref: 905n }],
     });
-    const expected = includeNamed ? [902n, 904n, 901n, 903n, 905n] : [901n];
+    const expected = includeNamed ? [902n, 904n, 903n, 905n, 901n] : [901n];
     for (let attempt = 0; attempt < 2; attempt++) {
       const pending = c.search('query', 10, includeNamed);
       respondSearch(t, 100n);
@@ -352,6 +352,40 @@ describe('UnifiedSearch', () => {
       respondSearch(t, 100n);
       expect((await pending).map((o) => o.oid)).toEqual([901n]);
     }
+  });
+
+  test('opt-in named lists precede broad categories within the global limit, after ranked hits', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    searchRoot(c, 100n, [901n, 902n, 903n, 904n, 905n]);
+    for (const oid of [901n, 902n, 903n, 904n, 905n]) seed(c, oid, 'Sooloos.Broker.Api.PerformerLite');
+    seed(c, 910n, 'Sooloos.Broker.Api.Playlist');
+    seed(c, 911n, 'Sooloos.Broker.Api.BrowserGenre');
+    Object.assign(c.graph.getObject(100n)!.fields, {
+      'UnifiedSearchResults::Playlists': { $ref: 102n },
+      'UnifiedSearchResults::Genres': { $ref: 103n },
+    });
+    seed(c, 102n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.Playlist>', {
+      $count: 1, $items: [{ $ref: 910n }],
+    });
+    seed(c, 103n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.BrowserGenre>', {
+      $count: 1, $items: [{ $ref: 911n }],
+    });
+    const defaultSearch = c.search('query', 3);
+    respondSearch(t, 100n);
+    expect((await defaultSearch).map((o) => o.oid)).toEqual([901n, 902n, 903n]);
+    const optedIn = c.search('query', 3, true);
+    respondSearch(t, 100n);
+    expect((await optedIn).map((o) => o.oid)).toEqual([910n, 911n, 901n]);
+
+    c.graph.getObject(100n)!.fields['UnifiedSearchResults::TopSearchResults'] = { $ref: 104n };
+    seed(c, 104n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TopSearchResult>', {
+      $count: 1, $items: [{ $type: 'Sooloos.Broker.Api.TopSearchResult',
+        'TopSearchResult::Artist': { $ref: 905n } }],
+    });
+    const ranked = c.search('query', 3, true);
+    respondSearch(t, 100n);
+    expect((await ranked).map((o) => o.oid)).toEqual([905n, 910n, 911n]);
   });
 
   test('incomplete named membership is ignored by default and fails explicitly when opted in', async () => {
