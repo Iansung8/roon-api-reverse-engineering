@@ -38,8 +38,8 @@ Exports the profile's play history, newest first, via
 printing one JSON line per play (playedAt / artist / title / album /
 completionPct / roonTrackId). The header documents the HistoryPlay wire
 layout: `Time` is a .NET DateTime int64 (Kind bits + ticks), `HistoryPlayId`
-equals the raw ticks, `TrackBase` is an inline TrackLink carrying the stable
-TrackId.
+is an opaque stable identity (it must not be interpreted as the play time), and
+`TrackBase` is an inline TrackLink carrying the stable TrackId.
 
 ```bash
 ROON_HOST=192.0.2.10 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
@@ -48,4 +48,5 @@ ROON_HOST=192.0.2.10 ROON_SERVER_BROKER_ID=0123456789abcdef0123456789abcdef \
 
 The optional limit must be a non-negative integer (default `50`); `0` reports
 the history count without retaining a page. `ROON_BROKER_ID` remains accepted
-as a legacy alias for `ROON_SERVER_BROKER_ID`.
+as a legacy alias for `ROON_SERVER_BROKER_ID`. Run each export with a fresh
+client connection so its object graph contains only that query's history.

@@ -30,6 +30,7 @@ function addPlay(
   const albumOid = oid + 10000n;
   const trackOid = oid + 20000n;
   const play = object(oid, 'HistoryPlay', {
+    'long Sooloos.Broker.Api.HistoryPlay::HistoryPlayId': oid + 30000n,
     'System.DateTime Sooloos.Broker.Api.HistoryPlay::Time': KIND_UTC + EPOCH_TICKS + BigInt(seconds) * 10000000n,
     'Sooloos.Broker.Api.TrackLite Sooloos.Broker.Api.HistoryPlay::Track': { $ref: trackOid },
   });
@@ -46,13 +47,18 @@ function addPlay(
   return play;
 }
 
-function mockClient(total: number, onRetain?: (page: number, objects: Map<string, RoonObject>) => CallResult | Promise<CallResult>) {
+function mockClient(
+  total: number,
+  onRetain?: (page: number, objects: Map<string, RoonObject>) => CallResult | Promise<CallResult>,
+  onNoReply?: (signature: string, objects: Map<string, RoonObject>) => void
+) {
   const objects = new Map<string, RoonObject>();
   objects.set(QUERY_OID.toString(), object(QUERY_OID, 'VirtualHistoryPlayQuery', {
     'int Sooloos.Broker.Api.VirtualHistoryPlayQuery::Count': total,
   }));
   const noReply: string[] = [];
   const retainPages: number[] = [];
+  const queryCalls = { count: 0 };
   const client: HistoryExportClient = {
     graph: {
       findByType: (name) => [...objects.values()].filter((item) => item.typeName.endsWith(`.${name}`)),
@@ -66,13 +72,19 @@ function mockClient(total: number, onRetain?: (page: number, objects: Map<string
         retainPages.push(page);
         return onRetain ? onRetain(page, objects) : ok();
       },
-      callMethodNoReply: (_oid, signature) => noReply.push(signature),
+      callMethodNoReply: (_oid, signature) => {
+        noReply.push(signature);
+        onNoReply?.(signature, objects);
+      },
     },
     profile: () => Buffer.alloc(16),
     structArg: () => Buffer.alloc(0),
-    call: async () => ok(queryPayload()),
+    call: async () => {
+      queryCalls.count++;
+      return ok(queryPayload());
+    },
   };
-  return { client, objects, noReply, retainPages };
+  return { client, objects, noReply, retainPages, queryCalls };
 }
 
 const options = { limit: 10, pageSize: 2, timeoutMs: 20, pollIntervalMs: 0 };
@@ -96,7 +108,12 @@ describe('exportPlayHistory', () => {
   test('returns an empty export without retaining a page', async () => {
     const mock = mockClient(0);
 
-    await expect(exportPlayHistory(mock.client, options)).resolves.toEqual({ total: 0, events: [] });
+    await expect(exportPlayHistory(mock.client, options)).resolves.toEqual({
+      total: 0,
+      events: [],
+      skipped: 0,
+      duplicates: 0,
+    });
     expect(mock.retainPages).toEqual([]);
     expect(mock.noReply).toHaveLength(1);
     expect(mock.noReply[0]).toContain('::Dispose()');
@@ -144,9 +161,24 @@ describe('exportPlayHistory', () => {
     expect(mock.noReply.at(-1)).toContain('::Dispose()');
   });
 
+  test('fails when a retained page never receives its required identity', async () => {
+    const mock = mockClient(1, (_page, objects) => {
+      const play = addPlay(objects, 1n, 1);
+      delete play.fields['long Sooloos.Broker.Api.HistoryPlay::HistoryPlayId'];
+      return ok();
+    });
+
+    await expect(exportPlayHistory(mock.client, options)).rejects.toThrow(
+      'timed out waiting for history page 0 identity and Time'
+    );
+    expect(mock.noReply.filter((signature) => signature.includes('ReleasePage'))).toHaveLength(1);
+    expect(mock.noReply.at(-1)).toContain('::Dispose()');
+  });
+
   test('tracks mutable plays by oid and waits for delayed identity and referenced fields', async () => {
     const mock = mockClient(2, (_page, objects) => {
       const play = addPlay(objects, 9n, 9, false);
+      delete play.fields['long Sooloos.Broker.Api.HistoryPlay::HistoryPlayId'];
       setTimeout(() => {
         play.fields['long Sooloos.Broker.Api.HistoryPlay::HistoryPlayId'] = EPOCH_TICKS + 9n;
       }, 1);
@@ -182,6 +214,79 @@ describe('exportPlayHistory', () => {
     const result = await exportPlayHistory(mock.client, { ...options, limit: 2, pageSize: 3 });
 
     expect(result.events.map((event) => event.title)).toEqual(['Track 3', 'Track 2']);
+  });
+
+  test('retains the full boundary page through delayed hydration before sorting and limiting', async () => {
+    let newestTimer: NodeJS.Timeout | undefined;
+    const mock = mockClient(
+      3,
+      (_page, objects) => {
+        addPlay(objects, 1n, 1);
+        addPlay(objects, 2n, 2);
+        newestTimer = setTimeout(() => addPlay(objects, 3n, 3), 25);
+        return ok();
+      },
+      (signature) => {
+        if (signature.includes('ReleasePage') && newestTimer) clearTimeout(newestTimer);
+      }
+    );
+
+    const result = await exportPlayHistory(mock.client, {
+      limit: 2,
+      pageSize: 3,
+      timeoutMs: 80,
+      pollIntervalMs: 1,
+    });
+
+    expect(result.events.map((event) => event.title)).toEqual(['Track 3', 'Track 2']);
+    expect(mock.noReply.filter((signature) => signature.includes('ReleasePage'))).toHaveLength(1);
+  });
+
+  test('skips permanently unresolved display references without aborting valid records', async () => {
+    const mock = mockClient(3, (_page, objects) => {
+      addPlay(objects, 1n, 1);
+      addPlay(objects, 2n, 2);
+      addPlay(objects, 3n, 3, false);
+      return ok();
+    });
+
+    const result = await exportPlayHistory(mock.client, {
+      limit: 2,
+      pageSize: 3,
+      timeoutMs: 10,
+      pollIntervalMs: 0,
+    });
+
+    expect(result.events.map((event) => event.title)).toEqual(['Track 2', 'Track 1']);
+    expect(result.skipped).toBe(1);
+  });
+
+  test('deduplicates different graph objects with the same opaque HistoryPlayId', async () => {
+    const mock = mockClient(2, (_page, objects) => {
+      const first = addPlay(objects, 1n, 1);
+      const second = addPlay(objects, 2n, 2);
+      second.fields['long Sooloos.Broker.Api.HistoryPlay::HistoryPlayId'] =
+        first.fields['long Sooloos.Broker.Api.HistoryPlay::HistoryPlayId'];
+      return ok();
+    });
+
+    const result = await exportPlayHistory(mock.client, options);
+
+    expect(result.events.map((event) => event.title)).toEqual(['Track 2']);
+    expect(result.duplicates).toBe(1);
+  });
+
+  test('fails closed when a reused client graph already contains history objects', async () => {
+    const mock = mockClient(1, (_page, objects) => {
+      addPlay(objects, 1n, 1);
+      return ok();
+    });
+    await exportPlayHistory(mock.client, options);
+
+    await expect(exportPlayHistory(mock.client, options)).rejects.toThrow(
+      'history export requires a fresh client graph'
+    );
+    expect(mock.queryCalls.count).toBe(1);
   });
 
   test('rejects invalid limits before dispatching a query', async () => {

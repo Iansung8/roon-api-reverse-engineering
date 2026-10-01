@@ -10,8 +10,9 @@
  * - HistoryPlay::Time is a .NET DateTime int64 — the top two bits are the
  *   Kind (Utc = bit 62), the low 62 bits are ticks (100ns) since
  *   0001-01-01 UTC.
- * - HistoryPlay::HistoryPlayId equals the raw ticks of Time — Roon keys each
- *   play by its timestamp, so it doubles as a stable per-play identity.
+ * - HistoryPlay::HistoryPlayId is an opaque stable per-play identity. An older
+ *   2.71 probe observed values equal to Time ticks, but that does not hold on
+ *   every Core; ordering always uses HistoryPlay::Time.
  * - HistoryPlay::TrackBase is an inline TrackLink value struct carrying the
  *   STABLE TrackId (the same id family the favorite/playlist flows use).
  * - HistoryPlay::Track refs a TrackLite (Title, LengthSeconds, Album ref);
@@ -51,8 +52,11 @@ async function main(): Promise<void> {
 
   try {
     await roon.connect();
-    const { total, events } = await exportPlayHistory(roon, { limit });
-    console.error(`history: ${total} play(s) on the Core; exporting ${events.length}`);
+    const { total, events, skipped, duplicates } = await exportPlayHistory(roon, { limit });
+    console.error(
+      `history: ${total} play(s) on the Core; exporting ${events.length}, ` +
+        `skipped ${skipped} unresolved, deduplicated ${duplicates}`
+    );
     for (const event of events) console.log(JSON.stringify(event));
   } finally {
     // close() is safe before or after establishment, so failed connects do not

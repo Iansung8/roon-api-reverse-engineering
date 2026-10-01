@@ -58,6 +58,20 @@ export interface HistoryEvent {
   roonTrackId?: string;
 }
 
+export interface HistoryExportResult {
+  total: number;
+  events: HistoryEvent[];
+  skipped: number;
+  duplicates: number;
+}
+
+interface HistorySnapshot {
+  oid: string;
+  identity: string;
+  time: bigint;
+  event?: HistoryEvent;
+}
+
 function field(o: RoonObject | undefined, suffix: string): unknown {
   if (!o) return undefined;
   return Object.entries(o.fields).find(([key]) => key.endsWith(suffix))?.[1];
@@ -91,6 +105,28 @@ async function pollFor<T>(
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}`);
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
+}
+
+async function pollUntil(
+  timeoutMs: number,
+  pollIntervalMs: number,
+  ready: () => boolean
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (ready()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+function identityOf(play: RoonObject): string | undefined {
+  const identity = field(play, '::HistoryPlayId');
+  if (typeof identity === 'bigint') return `bigint:${identity.toString()}`;
+  if (typeof identity === 'number' && Number.isFinite(identity)) return `number:${identity}`;
+  if (typeof identity === 'string') return `string:${identity}`;
+  if (Buffer.isBuffer(identity)) return `buffer:${identity.toString('hex')}`;
+  return undefined;
 }
 
 function assembleEvent(client: HistoryExportClient, play: RoonObject): HistoryEvent | undefined {
@@ -148,14 +184,19 @@ function validateOptions(options: HistoryExportOptions): Required<HistoryExportO
 
 /**
  * Export play history through the read-only VirtualHistoryQuery lifecycle.
- * A resolved call is complete: it either returns exactly min(Count, limit)
- * hydrated records, or throws rather than silently returning a partial export.
+ * Page membership, identity, and Time are fail-closed. Display references get
+ * a bounded hydration window and are reported as skips if still unresolved.
+ * Use a fresh client graph: query membership cannot be recovered reliably from
+ * a graph that already contains HistoryPlay objects from an earlier query.
  */
 export async function exportPlayHistory(
   client: HistoryExportClient,
   options: HistoryExportOptions
-): Promise<{ total: number; events: HistoryEvent[] }> {
+): Promise<HistoryExportResult> {
   const { limit, pageSize, timeoutMs, pollIntervalMs } = validateOptions(options);
+  if (client.graph.findByType('HistoryPlay').length > 0) {
+    throw new Error('history export requires a fresh client graph with no HistoryPlay objects');
+  }
 
   const criteria = inlineStruct(
     client.remoting.defineType('Sooloos.Broker.Api.HistoryQueryCriteria', [])
@@ -192,18 +233,18 @@ export async function exportPlayHistory(
       return count as number;
     });
     const target = Math.min(total, limit);
-    if (target === 0) return { total, events: [] };
+    if (target === 0) return { total, events: [], skipped: 0, duplicates: 0 };
 
     const plays = new Map<string, RoonObject>();
+    const snapshottedOids = new Set<string>();
+    const snapshots: HistorySnapshot[] = [];
     const harvest = (): number => {
       for (const play of client.graph.findByType('HistoryPlay')) {
         plays.set(play.oid.toString(), play);
       }
       return plays.size;
     };
-    harvest();
-
-    for (let page = 0; plays.size < target && page < Math.ceil(target / pageSize); page++) {
+    for (let page = 0; page < Math.ceil(target / pageSize); page++) {
       let acquired = false;
       try {
         const retained = await client.remoting.callMethod(
@@ -213,10 +254,34 @@ export async function exportPlayHistory(
         );
         if (!retained.success) throw new Error(`RetainPage(${page}) failed: ${retained.status}`);
         acquired = true;
-        const pageTarget = Math.min(target, (page + 1) * pageSize);
+        const pageTarget = Math.min(total, (page + 1) * pageSize);
         await pollFor(`history page ${page}`, timeoutMs, pollIntervalMs, () =>
           harvest() >= pageTarget ? plays.size : undefined
         );
+
+        const pagePlays = [...plays.values()].filter(
+          (play) => !snapshottedOids.has(play.oid.toString())
+        );
+        await pollFor(`history page ${page} identity and Time`, timeoutMs, pollIntervalMs, () =>
+          pagePlays.every(
+            (play) => identityOf(play) !== undefined && typeof field(play, '::Time') === 'bigint'
+          )
+            ? true
+            : undefined
+        );
+
+        await pollUntil(timeoutMs, pollIntervalMs, () =>
+          pagePlays.every((play) => assembleEvent(client, play) !== undefined)
+        );
+        for (const play of pagePlays) {
+          snapshots.push({
+            oid: play.oid.toString(),
+            identity: identityOf(play)!,
+            time: field(play, '::Time') as bigint,
+            event: assembleEvent(client, play),
+          });
+          snapshottedOids.add(play.oid.toString());
+        }
       } finally {
         if (acquired) {
           client.remoting.callMethodNoReply(
@@ -228,34 +293,40 @@ export async function exportPlayHistory(
       }
     }
 
-    if (plays.size < target) {
-      throw new Error(`history export incomplete: received ${plays.size} of ${target} play(s)`);
+    const byIdentity = new Map<string, HistorySnapshot>();
+    let duplicates = 0;
+    for (const snapshot of snapshots) {
+      const existing = byIdentity.get(snapshot.identity);
+      if (!existing) {
+        byIdentity.set(snapshot.identity, snapshot);
+        continue;
+      }
+      duplicates++;
+      const snapshotIsBetter =
+        (!existing.event && snapshot.event !== undefined) ||
+        ((existing.event === undefined) === (snapshot.event === undefined) &&
+          snapshot.time > existing.time);
+      if (snapshotIsBetter) {
+        byIdentity.set(snapshot.identity, snapshot);
+      }
     }
 
-    const sortable = await pollFor('history play timestamps', timeoutMs, pollIntervalMs, () => {
-      const candidates = [...plays.values()];
-      return candidates.every((play) => typeof field(play, '::Time') === 'bigint')
-        ? candidates
-        : undefined;
+    const ordered = [...byIdentity.values()].sort((a, b) => {
+      const aTicks = normalizedTicks(a.time);
+      const bTicks = normalizedTicks(b.time);
+      return aTicks === bTicks ? a.oid.localeCompare(b.oid) : aTicks > bTicks ? -1 : 1;
     });
-    const selected = sortable
-      .sort((a, b) => {
-        const aTicks = normalizedTicks(field(a, '::Time') as bigint);
-        const bTicks = normalizedTicks(field(b, '::Time') as bigint);
-        return aTicks === bTicks ? a.oid.toString().localeCompare(b.oid.toString()) : aTicks > bTicks ? -1 : 1;
-      })
-      .slice(0, target);
-    if (selected.length < target) {
-      throw new Error(`history export incomplete: ${target - selected.length} play(s) missing Time`);
+    const events: HistoryEvent[] = [];
+    let skipped = 0;
+    for (const snapshot of ordered) {
+      if (!snapshot.event) {
+        skipped++;
+        continue;
+      }
+      events.push(snapshot.event);
+      if (events.length >= target) break;
     }
-
-    const events = await pollFor('history record hydration', timeoutMs, pollIntervalMs, () => {
-      const hydrated = selected.map((play) => assembleEvent(client, play));
-      return hydrated.every((event): event is HistoryEvent => event !== undefined)
-        ? hydrated
-        : undefined;
-    });
-    return { total, events };
+    return { total, events, skipped, duplicates };
   } finally {
     client.remoting.callMethodNoReply(queryOid, SIG_DISPOSE, Buffer.alloc(0));
   }
