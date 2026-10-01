@@ -60,6 +60,12 @@ export function buildArgs(args: Arg[]): Buffer {
  */
 export function serializeStructValue(propType: number, v: unknown): Buffer {
   const w = new BinaryWriter();
+  // Generated struct callers may supply already-framed nullable scalar bytes.
+  // NullableGuid and NullableSooid are exceptions: their ordinary semantic
+  // values are Buffers too, so they must still receive presence/length framing.
+  if (Buffer.isBuffer(v) && propType >= 10 && propType <= 19 && propType !== 13 && propType !== 14) {
+    return v;
+  }
   if (propType >= 10 && propType <= 19) {
     // NullableBool and NullableSooid have dedicated wire forms. The remaining
     // nullable primitives use a presence byte followed by their base value.

@@ -61,6 +61,22 @@ describe('struct value encoding (Phase C)', () => {
     expect(absentReader.remaining).toBe(0);
   });
 
+  test('pre-serialized nullable scalar buffers pass through without another marker', () => {
+    const nullableInt = serializeStructValue(10, Buffer.from('012a', 'hex'));
+    expect(nullableInt.toString('hex')).toBe('012a');
+    const intReader = new BinaryReader(Buffer.concat([nullableInt, Buffer.from([0x2b])]));
+    expect(intReader.optionalInteger()).toBe(42);
+    expect(intReader.integer()).toBe(43);
+    expect(intReader.remaining).toBe(0);
+
+    const nullableBool = serializeStructValue(12, Buffer.from([2]));
+    expect(nullableBool.toString('hex')).toBe('02');
+    const boolReader = new BinaryReader(Buffer.concat([nullableBool, Buffer.from([0x2a])]));
+    expect(boolReader.optionalBoolean()).toBeNull();
+    expect(boolReader.integer()).toBe(42);
+    expect(boolReader.remaining).toBe(0);
+  });
+
   test('other nullable scalars use a presence byte and preserve alignment', () => {
     const cases: [number, unknown, (r: BinaryReader) => unknown][] = [
       [10, 42, (r) => r.optionalInteger()],
