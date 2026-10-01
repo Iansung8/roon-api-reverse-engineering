@@ -2,7 +2,7 @@
 /* eslint-disable */
 import { RoonClient } from '../proto/client';
 import { CallResult } from '../proto/remoting';
-import { Arg, buildArgs } from '../proto/serializer';
+import { Arg, buildArgs, serializeStructValue } from '../proto/serializer';
 import { buildStruct } from '../proto/structs';
 
 /** Base for a generated service bound to an object id. */
