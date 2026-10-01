@@ -2,6 +2,9 @@ import { ObjectGraph, PropertyType, isRef } from './objects';
 import { encodeRequest, FrameParser } from './frame';
 import { BinaryWriter } from './writer';
 import { writeFlexInt } from './flex';
+const searchCollections: { frames: { cmd: number; typeId: number; type: string; oid: number;
+  members: { name: string; propType: PropertyType }[]; bodyHex: string; refs: number[] }[] } =
+  require('./fixtures/search-collections.json');
 
 /** Feed raw frame bytes into a graph. */
 function feed(g: ObjectGraph, ...packets: Buffer[]) {
@@ -110,5 +113,88 @@ describe('ObjectGraph generic deserializer', () => {
     expect(title.$type).toBe('Wrapper');
     expect(title['Wrapper::Value']).toBe('Hello');
     expect(title['Wrapper::HasEditLayer']).toBe(true);
+  });
+});
+
+describe('DataList collection wire encoding', () => {
+  test('decodes normalized live search frames, including overlapping ordered result lists', () => {
+    const g = new ObjectGraph();
+    for (const frame of searchCollections.frames) {
+      feed(g, defType(frame.typeId, frame.type, frame.members.map((m) => [m.name, m.propType])));
+      feed(g, encodeRequest(frame.cmd, Buffer.from(frame.bodyHex, 'hex'), null));
+      const object = g.getObject(frame.oid)!;
+      const refs = frame.refs.map((id) => ({ $ref: BigInt(id) }));
+      if (frame.type.includes('DataList<')) {
+        expect(object.fields).toEqual({ $count: refs.length, $items: refs });
+      } else {
+        expect(object.fields[frame.members[0].name]).toEqual(refs[0]);
+      }
+    }
+  });
+
+  test('count is the first value, with no sparse header or terminator', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>', []));
+    // oid=99, type=20, count=2, refs=901,902. This is the installed
+    // DataList<AlbumLite> adapter format, not Query's (1,count,0) header.
+    feed(g, encodeRequest(3, Buffer.from('63140287058706', 'hex'), null));
+    expect(g.getObject(99n)!.fields).toEqual({ $count: 2, $items: [{ $ref: 901n }, { $ref: 902n }] });
+    feed(g, encodeRequest(5, Buffer.from('6314018706', 'hex'), null));
+    expect(g.getObject(99n)!.fields).toEqual({ $count: 1, $items: [{ $ref: 902n }] });
+    feed(g, encodeRequest(5, Buffer.from('631400', 'hex'), null));
+    expect(g.getObject(99n)!.fields).toEqual({ $count: 0, $items: [] });
+  });
+
+  test('truncated item references remain incomplete instead of gaining phantom objects', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>', []));
+    feed(g, encodeRequest(3, Buffer.from('631402870587', 'hex'), null));
+    expect(g.getObject(99n)!.fields).toEqual({ $count: 2, $items: [{ $ref: 901n }] });
+  });
+
+  test('DataList element encoding respects strings and primitive values', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.DataList<string>', []));
+    feed(g, encodeRequest(3, Buffer.from('63140201410142', 'hex'), null));
+    expect(g.getObject(99n)!.fields.$items).toEqual(['A', 'B']);
+    feed(g, defType(21, 'Sooloos.Broker.Api.DataList<int>', []));
+    feed(g, encodeRequest(3, Buffer.from('6415020102', 'hex'), null));
+    expect(g.getObject(100n)!.fields.$items).toEqual([1, 2]);
+  });
+
+  test('DataList<TopSearchResult> reads inline values through the Object codec', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TopSearchResult>', []));
+    feed(g, defType(21, 'Sooloos.Broker.Api.TopSearchResult', [['TopSearchResult::Album', PropertyType.Object]]));
+    // list oid=99/type=20/count=1; inline marker=1/type=21/length=4;
+    // sparse album member=1/ref=901 followed by terminator=0.
+    feed(g, encodeRequest(3, Buffer.from('63140101150401870500', 'hex'), null));
+    expect(g.getObject(99n)!.fields).toEqual({ $count: 1, $items: [{
+      $type: 'Sooloos.Broker.Api.TopSearchResult', 'TopSearchResult::Album': { $ref: 901n },
+    }] });
+  });
+
+  test('a missing DataList count cannot masquerade as a complete empty list', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>', []));
+    feed(g, encodeRequest(3, Buffer.from('6314', 'hex'), null));
+    expect(g.getObject(99n)!.fields.$count).toBe(-1);
+  });
+
+  test('a repeated PUSHSTUB retains populated collection identity and membership', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>', []));
+    feed(g, encodeRequest(3, Buffer.from('6314018705', 'hex'), null));
+    const original = g.getObject(99n)!;
+    feed(g, encodeRequest(4, Buffer.from('6314', 'hex'), null));
+    expect(g.getObject(99n)).toBe(original);
+    expect(original.fields).toEqual({ $count: 1, $items: [{ $ref: 901n }] });
+  });
+
+  test('Query retains its separate sparse count header', () => {
+    const g = new ObjectGraph();
+    feed(g, defType(20, 'Sooloos.Broker.Api.Query<Sooloos.Broker.Api.AlbumLite>', []));
+    feed(g, encodeRequest(3, Buffer.from('631401020087058706', 'hex'), null));
+    expect(g.getObject(99n)!.fields).toEqual({ $count: 2, $items: [{ $ref: 901n }, { $ref: 902n }] });
   });
 });
