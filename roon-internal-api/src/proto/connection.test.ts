@@ -67,6 +67,23 @@ function grabEphemeralPort(): Promise<number> {
   });
 }
 
+/** Run a test with just the initial handshake watchdog accelerated. */
+async function withShortHandshakeTimeout<T>(run: () => Promise<T>): Promise<T> {
+  const setTimeout = net.Socket.prototype.setTimeout;
+  const spy = jest.spyOn(net.Socket.prototype, 'setTimeout').mockImplementation(function (
+    this: net.Socket,
+    timeout: number,
+    callback?: () => void
+  ): net.Socket {
+    return setTimeout.call(this, timeout === 20000 ? 60 : timeout, callback);
+  });
+  try {
+    return await run();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 describe('RoonConnection close notification across socket attempts', () => {
   // Regression for the retry case: a connect() that fails before
   // establishment must not consume the once-only close notification, or a
@@ -129,5 +146,56 @@ describe('RoonConnection close notification across socket attempts', () => {
       conn.close();
       await core.close();
     }
+  });
+});
+
+describe('RoonConnection handshake timeout', () => {
+  test('an established idle connection outlives the handshake watchdog', async () => {
+    await withShortHandshakeTimeout(async () => {
+      const port = await grabEphemeralPort();
+      const core = await startFakeCore(port);
+      const conn = new RoonConnection({
+        host: '127.0.0.1',
+        port,
+        serverBrokerId: Buffer.alloc(16),
+      });
+      const onclosed = jest.fn();
+      conn.onclosed = onclosed;
+      try {
+        await conn.connect();
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        expect(onclosed).not.toHaveBeenCalled();
+        expect(() => conn.send(Buffer.from([0x41]))).not.toThrow();
+        conn.close();
+        expect(onclosed).toHaveBeenCalledTimes(1);
+      } finally {
+        conn.close();
+        await core.close();
+      }
+    });
+  });
+
+  test('an incomplete handshake still times out', async () => {
+    await withShortHandshakeTimeout(async () => {
+      const port = await grabEphemeralPort();
+      const sockets: net.Socket[] = [];
+      const server = net.createServer((socket) => {
+        sockets.push(socket);
+        socket.on('error', () => {});
+      });
+      await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+      const conn = new RoonConnection({
+        host: '127.0.0.1',
+        port,
+        serverBrokerId: Buffer.alloc(16),
+      });
+      try {
+        await expect(conn.connect()).rejects.toThrow(/timed out during handshake/);
+      } finally {
+        conn.close();
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
   });
 });
