@@ -4,6 +4,7 @@
  */
 import { RoonClient, generated } from '../../roon-internal-api/src/index';
 import { RoonObject } from '../../roon-internal-api/src/proto/objects';
+import { decodeBoolProfileData } from './profile-data-bool';
 
 function title(o: RoonObject): string | undefined {
   for (const [k, v] of Object.entries(o.fields)) if ((k.endsWith('::Title') || k.endsWith('::Name')) && typeof v === 'string') return v;
@@ -29,9 +30,16 @@ export interface SearchResult {
   tracks: TrackRow[]; works: NamedRow[];
 }
 
-function favoriteOf(o: RoonObject): boolean | undefined {
+function favoriteOf(roon: RoonClient, o: RoonObject): boolean | undefined {
   for (const [k, v] of Object.entries(o.fields)) {
     if (k.endsWith('::IsFavorite') && typeof v === 'boolean') return v;
+    if (k.endsWith('::IsFavorite') && Buffer.isBuffer(v)) {
+      try {
+        return decodeBoolProfileData(v, roon.profile());
+      } catch {
+        return undefined;
+      }
+    }
   }
   return undefined;
 }
@@ -57,7 +65,7 @@ export async function search(roon: RoonClient, q: string): Promise<SearchResult>
     if (!name) continue;
     seen.add(key);
     if (o.typeName.endsWith('AlbumLite') || o.typeName.endsWith('.Album'))
-      albums.push({ oid: key, title: cleanLinks(name), artist: artistOf(o), favorite: favoriteOf(o) });
+      albums.push({ oid: key, title: cleanLinks(name), artist: artistOf(o), favorite: favoriteOf(roon, o) });
     else if (o.typeName.endsWith('TrackLite') || o.typeName.endsWith('.Track'))
       tracks.push({ oid: key, title: cleanLinks(name) });
     else if (o.typeName.endsWith('PerformerLite') || o.typeName.endsWith('.Performer'))
@@ -88,7 +96,7 @@ export function library(roon: RoonClient): { albums: AlbumRow[]; artists: Artist
     const key = o.oid.toString();
     if (t && !seen.has(key)) {
       seen.add(key);
-      albums.push({ oid: key, title: t, artist: artistOf(o), favorite: favoriteOf(o) });
+      albums.push({ oid: key, title: t, artist: artistOf(o), favorite: favoriteOf(roon, o) });
     }
   }
   const aseen = new Set<string>();

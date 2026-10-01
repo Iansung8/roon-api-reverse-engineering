@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { library, search } from './bridge';
 import type { RoonObject } from '../../roon-internal-api/src/proto/objects';
+import { writeFlexInt } from '../../roon-internal-api/src/proto/flex';
 
-function object(oid: bigint, title: string, favorite?: boolean): RoonObject {
+function object(oid: bigint, title: string, favorite?: boolean | Buffer): RoonObject {
   const fields: Record<string, unknown> = {
     'Sooloos.Broker.Api.Album::Title': title,
   };
@@ -11,9 +12,27 @@ function object(oid: bigint, title: string, favorite?: boolean): RoonObject {
   return { oid, typeId: 1, typeName: 'Sooloos.Broker.Api.Album', fields };
 }
 
-test('library rows preserve true, false, and unknown IsFavorite states', () => {
-  const albums = [object(1n, 'Favorite', true), object(2n, 'Plain', false), object(3n, 'Unknown')];
+const PROFILE = Buffer.from('010203', 'hex');
+
+function profileFavorite(value: boolean): Buffer {
+  const count: number[] = [];
+  const length: number[] = [];
+  writeFlexInt(count, 1);
+  writeFlexInt(length, PROFILE.length);
+  return Buffer.concat([Buffer.from(count), Buffer.from(length), PROFILE, Buffer.from([value ? 1 : 0])]);
+}
+
+test('library rows resolve scalar and profile-backed IsFavorite states', () => {
+  const albums = [
+    object(1n, 'Scalar favorite', true),
+    object(2n, 'Scalar plain', false),
+    object(3n, 'Profile favorite', profileFavorite(true)),
+    object(4n, 'Profile plain', Buffer.from([0])),
+    object(5n, 'Malformed profile', Buffer.from([1])),
+    object(6n, 'Unknown'),
+  ];
   const roon = {
+    profile: () => PROFILE,
     graph: {
       findByType(type: string) {
         if (type === 'Album') return albums;
@@ -25,8 +44,20 @@ test('library rows preserve true, false, and unknown IsFavorite states', () => {
   assert.deepEqual(library(roon as never).albums.map(({ oid, favorite }) => ({ oid, favorite })), [
     { oid: '1', favorite: true },
     { oid: '2', favorite: false },
-    { oid: '3', favorite: undefined },
+    { oid: '3', favorite: true },
+    { oid: '4', favorite: false },
+    { oid: '5', favorite: undefined },
+    { oid: '6', favorite: undefined },
   ]);
+});
+
+test('profile-backed favorite stays unknown when the active profile is unavailable', () => {
+  const album = object(7n, 'No profile', profileFavorite(true));
+  const roon = {
+    profile: () => { throw new Error('profile unavailable'); },
+    graph: { findByType: (type: string) => type === 'Album' ? [album] : [] },
+  };
+  assert.equal(library(roon as never).albums[0].favorite, undefined);
 });
 
 test('search maps only the current UnifiedSearch result identities', async () => {
