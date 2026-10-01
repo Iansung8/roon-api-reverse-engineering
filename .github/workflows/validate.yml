@@ -1,0 +1,64 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            roon-internal-api/package-lock.json
+            roon-web/package-lock.json
+            site/package-lock.json
+
+      - name: Install SDK dependencies
+        run: npm ci
+        working-directory: roon-internal-api
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: roon-web
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: site
+
+      - name: Regenerate checked-in API
+        run: npx ts-node tools/gen_client.ts
+        working-directory: roon-internal-api
+      - name: Verify generated files are current
+        run: >-
+          git diff --exit-code --
+          roon-internal-api/src/generated/api.ts
+          roon-internal-api/docs/reflist-audit.md
+
+      - name: Lint SDK
+        run: npm run lint
+        working-directory: roon-internal-api
+      - name: Test SDK
+        run: npm test -- --runInBand
+        working-directory: roon-internal-api
+      - name: Build SDK
+        run: npm run build
+        working-directory: roon-internal-api
+
+      - name: Typecheck web client
+        run: npm run typecheck
+        working-directory: roon-web
+      - name: Build web client
+        run: npm run build
+        working-directory: roon-web
+
+      - name: Build documentation
+        run: npm run build
+        working-directory: site
