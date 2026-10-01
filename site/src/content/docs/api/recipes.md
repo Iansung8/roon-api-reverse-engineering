@@ -79,14 +79,18 @@ something disposable first.
 ## Search
 
 ```ts
-const albums = await roon.searchAlbums('Miles');   // in-library albums
-const objects = await roon.search('Miles Davis');  // mixed: albums/tracks/performers
+const objects = await roon.search('Miles Davis');  // albums/tracks/performers/works
+const withSections = await roon.search('Jazz', 50, true); // also playlists and genres
 ```
 
-In-library / currently-loaded search half-works. **Full streaming-catalog search**
-(arbitrary Tidal/Qobuz terms) is the biggest unfinished piece — see
-[how this went](/journey/#where-it-stands) and [contributing](/contributing/).
-`examples/search-albums.ts`, `examples/poc-search.ts`.
+UnifiedSearch follows the Core's returned memberships, including cached results on
+repeated queries. The optional third argument retains playlist and genre results;
+existing callers keep the four entity families shown above. These reads were checked
+against Roon 2.73 build 1696. Broader streaming-catalog behavior still needs validation.
+
+The older paged `searchAlbums` helper and `examples/search-albums.ts` /
+`examples/poc-search.ts` remain experimental research paths. Historical findings are
+preserved in [the journey](/journey/#where-it-stands).
 
 ## The full generated API
 
