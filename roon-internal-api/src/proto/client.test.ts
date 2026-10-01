@@ -312,6 +312,61 @@ describe('UnifiedSearch', () => {
     expect(await p).toEqual([]);
   });
 
+  test.each([false, true])('playlist and genre membership is opt-in (%s)', async (includeNamed) => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    searchRoot(c, 100n, [901n]);
+    seed(c, 901n, 'Sooloos.Broker.Api.PerformerLite');
+    seed(c, 902n, 'Sooloos.Broker.Api.Playlist', { 'Playlist::Related': { $ref: 999n } });
+    seed(c, 903n, 'Sooloos.Broker.Api.Playlist');
+    seed(c, 904n, 'Sooloos.Broker.Api.BrowserGenre');
+    seed(c, 905n, 'Sooloos.Broker.Api.GenreLite');
+    seed(c, 999n, 'Sooloos.Broker.Api.Playlist');
+    Object.assign(c.graph.getObject(100n)!.fields, {
+      'UnifiedSearchResults::TopSearchResults': { $ref: 102n },
+      'UnifiedSearchResults::Playlists': { $ref: 103n },
+      'UnifiedSearchResults::Genres': { $ref: 104n },
+    });
+    seed(c, 102n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TopSearchResult>', {
+      $count: 2, $items: [
+        { $type: 'Sooloos.Broker.Api.TopSearchResult', 'TopSearchResult::Playlist': { $ref: 902n } },
+        { $type: 'Sooloos.Broker.Api.TopSearchResult', 'TopSearchResult::Genre': { $ref: 904n } },
+      ],
+    });
+    seed(c, 103n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.Playlist>', {
+      $count: 3, $items: [{ $ref: 903n }, { $ref: 902n }, { $ref: 903n }],
+    });
+    seed(c, 104n, 'Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.BrowserGenre>', {
+      $count: 3, $items: [{ $ref: 905n }, { $ref: 904n }, { $ref: 905n }],
+    });
+    const expected = includeNamed ? [902n, 904n, 901n, 903n, 905n] : [901n];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const pending = c.search('query', 10, includeNamed);
+      respondSearch(t, 100n);
+      const hits = await pending;
+      expect(hits.map((o) => o.oid)).toEqual(expected);
+      for (const hit of hits) expect(hit).toBe(c.graph.getObject(hit.oid));
+    }
+    if (!includeNamed) {
+      const pending = c.search('query', 10);
+      respondSearch(t, 100n);
+      expect((await pending).map((o) => o.oid)).toEqual([901n]);
+    }
+  });
+
+  test('incomplete named membership is ignored by default and fails explicitly when opted in', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    searchRoot(c, 100n, []);
+    c.graph.getObject(100n)!.fields['UnifiedSearchResults::Playlists'] = { $ref: 999n };
+    const defaultSearch = c.search('query', 10);
+    respondSearch(t, 100n);
+    expect(await defaultSearch).toEqual([]);
+    const optedIn = c.search('query', 10, true);
+    respondSearch(t, 100n);
+    await expect(optedIn).rejects.toThrow(/incomplete/i);
+  });
+
   test('a failed call surfaces as an error instead of an empty result', async () => {
     const { c, t } = buildClient();
     seedCore(c);
