@@ -198,4 +198,51 @@ describe('RoonConnection handshake timeout', () => {
       }
     });
   });
+
+  test('a ConnectRequest without a ConnectResponse still times out', async () => {
+    await withShortHandshakeTimeout(async () => {
+      const port = await grabEphemeralPort();
+      const sockets: net.Socket[] = [];
+      let receivedConnectRequest!: () => void;
+      const connectRequestReceived = new Promise<void>((resolve) => {
+        receivedConnectRequest = resolve;
+      });
+      const server = net.createServer((socket) => {
+        sockets.push(socket);
+        let step = 0;
+        socket.on('data', (data: Buffer) => {
+          if (step === 0 && data.subarray(0, 4).equals(MAGIC)) {
+            step = 1;
+            socket.write(Buffer.concat([MAGIC, Buffer.from([0x01, 0x80])]));
+            return;
+          }
+          if (step === 1 && data.subarray(0, 4).equals(MAGIC)) {
+            step = 2;
+            socket.write(Buffer.concat([MAGIC, Buffer.from([0x01, 0x82]), Buffer.alloc(16)]));
+            return;
+          }
+          if (step === 2) {
+            step = 3;
+            receivedConnectRequest();
+          }
+        });
+        socket.on('error', () => {});
+      });
+      await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+      const conn = new RoonConnection({
+        host: '127.0.0.1',
+        port,
+        serverBrokerId: Buffer.alloc(16),
+      });
+      try {
+        const connecting = conn.connect();
+        await connectRequestReceived;
+        await expect(connecting).rejects.toThrow(/timed out during handshake/);
+      } finally {
+        conn.close();
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+  });
 });
