@@ -499,7 +499,7 @@ export class RemoteBrokerApi extends ServiceBase {
   getAuxFileUrl(auxfile: bigint, imagescale: number | null): void {
     const parts: Buffer[] = [
       buildArgs([Arg.ref(auxfile)]),
-      buildArgs([Arg.int(Number(imagescale ?? 0))]),
+      serializeStructValue(10, imagescale),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.RemoteBroker::GetAuxFileUrl(Sooloos.Broker.Api.AuxFile, int?)", Buffer.concat(parts));
   }
@@ -758,7 +758,7 @@ export class AccountsApi extends ServiceBase {
       buildArgs([Arg.str(referredby ?? null)]),
       buildArgs([Arg.bool(Boolean(joinmailinglist))]),
       buildArgs([Arg.str(birthdate ?? null)]),
-      buildArgs([Arg.bool(Boolean(sendemail))]),
+      serializeStructValue(12, sendemail),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.Accounts::UserCreate(string, string, string, string, string, string, string, bool, string, bool?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -1429,9 +1429,9 @@ export class EndpointApi extends ServiceBase {
   }
   async setVolumeLimits(hard_limit_min: number | null, hard_limit_max: number | null, soft_limit: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.double(Number(hard_limit_min ?? 0))]),
-      buildArgs([Arg.double(Number(hard_limit_max ?? 0))]),
-      buildArgs([Arg.double(Number(soft_limit ?? 0))]),
+      serializeStructValue(15, hard_limit_min),
+      serializeStructValue(15, hard_limit_max),
+      serializeStructValue(15, soft_limit),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.Endpoint::SetVolumeLimits(double?, double?, double?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -1608,8 +1608,8 @@ export class ZoneApi extends ServiceBase {
   }
   async setSleepTimer(is_enabled: boolean | null, duration_minutes: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.bool(Boolean(is_enabled))]),
-      buildArgs([Arg.int(Number(duration_minutes ?? 0))]),
+      serializeStructValue(12, is_enabled),
+      serializeStructValue(10, duration_minutes),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.Zone::SetSleepTimer(bool?, int?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -2040,7 +2040,7 @@ export class RadioApi extends ServiceBase {
     const parts: Buffer[] = [
       buildArgs([Arg.sooid(profileid ?? Buffer.alloc(0))]),
       buildStruct(this.c, "Sooloos.Broker.Api.RadioBrowseCriteria", (criteria ?? {})),
-      buildArgs([Arg.int(Number(count ?? 0))]),
+      serializeStructValue(10, count),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.Radio::BrowseChannels(System.Sooid, Sooloos.Broker.Api.RadioBrowseCriteria, int?, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.Channel>>)", Buffer.concat(parts));
   }
@@ -2133,7 +2133,7 @@ export class SqueezeboxAudioDeviceApi extends ServiceBase {
   }
   setMaxSampleRateMultiplier(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.SqueezeboxAudioDevice::SetMaxSampleRateMultiplier(int?)", Buffer.concat(parts));
   }
@@ -2238,13 +2238,13 @@ export class DevialetAudioDeviceApi extends ServiceBase {
   }
   setMaxSampleRateMultiplier(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.DevialetAudioDevice::SetMaxSampleRateMultiplier(int?)", Buffer.concat(parts));
   }
   setBufferSize(size: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(size ?? 0))]),
+      serializeStructValue(10, size),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.DevialetAudioDevice::SetBufferSize(int?)", Buffer.concat(parts));
   }
@@ -2397,19 +2397,19 @@ export class AudioDeviceSetupApi extends ServiceBase {
   }
   async setMaxSampleRateMultiplier(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::SetMaxSampleRateMultiplier(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
   async setMaxDsdSampleRateMultiplier(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::SetMaxDsdSampleRateMultiplier(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
   async setMaxBitsPerSample(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::SetMaxBitsPerSample(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -2469,19 +2469,19 @@ export class AudioDeviceSetupApi extends ServiceBase {
   }
   async devialet_SetBufferSize(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::Devialet_SetBufferSize(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
   async rAAT_SetClockMasterPriority(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::RAAT_SetClockMasterPriority(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
   async rAAT_SetSyncAdjustment(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.double(Number(value ?? 0))]),
+      serializeStructValue(15, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::RAAT_SetSyncAdjustment(double?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -2517,7 +2517,7 @@ export class AudioDeviceSetupApi extends ServiceBase {
   }
   async rAAT_SetBufferSize(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.double(Number(value ?? 0))]),
+      serializeStructValue(15, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::RAAT_SetBufferSize(double?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -2582,15 +2582,15 @@ export class AudioDeviceSetupApi extends ServiceBase {
   }
   async setAutoSleepSeconds(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::SetAutoSleepSeconds(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
   async setVolumeLimits(hard_limit_min: number | null, hard_limit_max: number | null, soft_limit: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.double(Number(hard_limit_min ?? 0))]),
-      buildArgs([Arg.double(Number(hard_limit_max ?? 0))]),
-      buildArgs([Arg.double(Number(soft_limit ?? 0))]),
+      serializeStructValue(15, hard_limit_min),
+      serializeStructValue(15, hard_limit_max),
+      serializeStructValue(15, soft_limit),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.AudioDeviceSetup::SetVolumeLimits(double?, double?, double?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -2674,13 +2674,13 @@ export class KefAudioDeviceApi extends ServiceBase {
   }
   setMaxSampleRateMultiplier(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.KefAudioDevice::SetMaxSampleRateMultiplier(int?)", Buffer.concat(parts));
   }
   setMaxBitsPerSample(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.KefAudioDevice::SetMaxBitsPerSample(int?)", Buffer.concat(parts));
   }
@@ -2824,19 +2824,19 @@ export class RaatAudioDeviceApi extends ServiceBase {
   }
   setMaxBitsPerSample(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.RaatAudioDevice::SetMaxBitsPerSample(int?)", Buffer.concat(parts));
   }
   setMaxSampleRateMultiplier(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.RaatAudioDevice::SetMaxSampleRateMultiplier(int?)", Buffer.concat(parts));
   }
   setMaxDsdSampleRateMultiplier(mult: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(mult ?? 0))]),
+      serializeStructValue(10, mult),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.RaatAudioDevice::SetMaxDsdSampleRateMultiplier(int?)", Buffer.concat(parts));
   }
@@ -2848,7 +2848,7 @@ export class RaatAudioDeviceApi extends ServiceBase {
   }
   setClockMasterPriority(value: number | null): void {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     this.c.remoting.callMethodNoReply(this.oid, "Sooloos.Broker.Api.RaatAudioDevice::SetClockMasterPriority(int?)", Buffer.concat(parts));
   }
@@ -3327,7 +3327,7 @@ export class SampleRateConversionItemApi extends ServiceBase {
 export class SampleRateConversionRuleApi extends ServiceBase {
   async setOutputSampleRate(rate: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(rate ?? 0))]),
+      serializeStructValue(10, rate),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.SampleRateConversionRule::SetOutputSampleRate(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -3988,7 +3988,7 @@ export class LibraryApi extends ServiceBase {
   }
   async getLocalizedEntityText(sooid: Uint8Array | null, selfid: (bigint | number), blobtype: string | null, sources: Buffer): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.sooid(sooid ?? Buffer.alloc(0))]),
+      serializeStructValue(14, sooid),
       buildArgs([Arg.long((selfid ?? 0) as any)]),
       buildArgs([Arg.str(blobtype ?? null)]),
       (sources),
@@ -3997,7 +3997,7 @@ export class LibraryApi extends ServiceBase {
   }
   async getLocalizedEntityText_2(sooid: Uint8Array | null, blobtype: string | null, sources: Buffer): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.sooid(sooid ?? Buffer.alloc(0))]),
+      serializeStructValue(14, sooid),
       buildArgs([Arg.str(blobtype ?? null)]),
       (sources),
     ];
@@ -4591,7 +4591,7 @@ export class LibraryApi extends ServiceBase {
     const parts: Buffer[] = [
       buildArgs([Arg.sooid(profileid ?? Buffer.alloc(0))]),
       buildArgs([Arg.ref(album)]),
-      buildArgs([Arg.int(Number(rating ?? 0))]),
+      serializeStructValue(10, rating),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.Library::SetProfileRating(System.Sooid, Sooloos.Broker.Api.AlbumBase, int?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -6267,7 +6267,7 @@ export class LibraryApi extends ServiceBase {
 export class MobileApi extends ServiceBase {
   async setCurrentPort(value: number | null): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.int(Number(value ?? 0))]),
+      serializeStructValue(10, value),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.Mobile::SetCurrentPort(int?, Base.ResultCallback)", Buffer.concat(parts));
   }
@@ -6407,7 +6407,7 @@ export class LocalLibraryApi extends ServiceBase {
   }
   async getLocalizedEntityText(sooid: Uint8Array | null, selfid: (bigint | number), blobtype: string | null, sources: Buffer): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.sooid(sooid ?? Buffer.alloc(0))]),
+      serializeStructValue(14, sooid),
       buildArgs([Arg.long((selfid ?? 0) as any)]),
       buildArgs([Arg.str(blobtype ?? null)]),
       (sources),
@@ -6416,7 +6416,7 @@ export class LocalLibraryApi extends ServiceBase {
   }
   async getLocalizedEntityText_2(sooid: Uint8Array | null, blobtype: string | null, sources: Buffer): Promise<CallResult> {
     const parts: Buffer[] = [
-      buildArgs([Arg.sooid(sooid ?? Buffer.alloc(0))]),
+      serializeStructValue(14, sooid),
       buildArgs([Arg.str(blobtype ?? null)]),
       (sources),
     ];
@@ -7020,7 +7020,7 @@ export class LocalLibraryApi extends ServiceBase {
     const parts: Buffer[] = [
       buildArgs([Arg.sooid(profileid ?? Buffer.alloc(0))]),
       buildArgs([Arg.ref(album)]),
-      buildArgs([Arg.int(Number(rating ?? 0))]),
+      serializeStructValue(10, rating),
     ];
     return this.c.remoting.callMethod(this.oid, "Sooloos.Broker.Api.LocalLibrary::SetProfileRating(System.Sooid, Sooloos.Broker.Api.AlbumBase, int?, Base.ResultCallback)", Buffer.concat(parts));
   }

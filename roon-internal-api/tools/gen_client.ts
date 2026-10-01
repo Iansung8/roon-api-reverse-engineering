@@ -131,6 +131,18 @@ function tsType(kind: string): string {
 // param's FQ type (for struct typeName).
 function argExpr(kind: string, v: string, ptype: string): string {
   const base = kind.replace(/\?$/, '');
+  if (kind.endsWith('?')) {
+    switch (base) {
+      case 'prim:int': return `serializeStructValue(10, ${v})`;
+      case 'prim:long': return `serializeStructValue(11, ${v})`;
+      case 'prim:bool': return `serializeStructValue(12, ${v})`;
+      case 'sooid': return `serializeStructValue(14, ${v})`;
+      case 'prim:double': return `serializeStructValue(15, ${v})`;
+      case 'prim:float': return `serializeStructValue(16, ${v})`;
+      case 'prim:char': return `serializeStructValue(17, ${v})`;
+      case 'enum': return `serializeStructValue(19, ${v})`;
+    }
+  }
   switch (base) {
     case 'sooid': return `buildArgs([Arg.sooid(${v} ?? Buffer.alloc(0))])`;
     case 'prim:int': case 'prim:char': return `buildArgs([Arg.int(Number(${v} ?? 0))])`;

@@ -1,4 +1,4 @@
-import { LibraryApi, TransportApi, ZoneApi, makeApi } from './api';
+import { EndpointApi, LibraryApi, TransportApi, ZoneApi, makeApi } from './api';
 
 /** Minimal stub standing in for a connected RoonClient. */
 function stub() {
@@ -20,6 +20,26 @@ function stub() {
 }
 
 describe('generated API (Phase B codegen)', () => {
+  test('nullable method arguments retain null and non-null wire representations', async () => {
+    const { c, calls } = stub();
+    const endpoint = new EndpointApi(c, 46n);
+    await endpoint.setVolumeLimits(null, null, null);
+    expect(calls[0].args.toString('hex')).toBe('000000');
+
+    const zone = new ZoneApi(c, 46n);
+    await zone.setSleepTimer(null, 5);
+    expect(calls[1].args.toString('hex')).toBe('020105');
+    await zone.setSleepTimer(false, null);
+    expect(calls[2].args.toString('hex')).toBe('0000');
+
+    const library = new LibraryApi(c, 46n);
+    const sooid = Buffer.from('3f0116', 'hex');
+    await library.getLocalizedEntityText(sooid, 1n, null, Buffer.alloc(0));
+    expect(calls[3].args.toString('hex')).toBe('033f0116018fffffff7f');
+    await library.getLocalizedEntityText(null, 1n, null, Buffer.alloc(0));
+    expect(calls[4].args.toString('hex')).toBe('8fffffff7f018fffffff7f');
+  });
+
   test('LibraryApi.favoriteOrBan(track) sends correct signature + args', async () => {
     const { c, calls } = stub();
     const lib = new LibraryApi(c, 46n);

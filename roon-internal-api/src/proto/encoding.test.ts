@@ -26,6 +26,69 @@ describe('struct value encoding (Phase C)', () => {
     const body = inline.subarray(3).toString('hex'); // strip 3-byte header (01 07 <len>)
     expect(body).toBe('01123f01162027273a55d64bbf4a85f335410e2f020e6a6fc3a36f2067696c626572746f00');
   });
+
+  test('NullableBool uses one tri-state byte and preserves the following field', () => {
+    const cases: [boolean | null, string, boolean | null][] = [
+      [false, '00', false],
+      [true, '01', true],
+      [null, '02', null],
+    ];
+
+    for (const [value, hex, expected] of cases) {
+      const encoded = serializeStructValue(12, value);
+      expect(encoded.toString('hex')).toBe(hex);
+      const r = new BinaryReader(Buffer.concat([encoded, Buffer.from([0x2a])]));
+      expect(r.optionalBoolean()).toBe(expected);
+      expect(r.integer()).toBe(42);
+      expect(r.remaining).toBe(0);
+    }
+  });
+
+  test('NullableSooid keeps length framing for Buffer values and -1 for null', () => {
+    const sooid = Buffer.from('3f0116', 'hex');
+    const present = serializeStructValue(14, sooid);
+    expect(present.toString('hex')).toBe('033f0116');
+    const presentReader = new BinaryReader(Buffer.concat([present, Buffer.from([0x2a])]));
+    expect(presentReader.optionalSooid()?.toString('hex')).toBe('3f0116');
+    expect(presentReader.integer()).toBe(42);
+    expect(presentReader.remaining).toBe(0);
+
+    const absent = serializeStructValue(14, null);
+    expect(absent.toString('hex')).toBe('8fffffff7f');
+    const absentReader = new BinaryReader(Buffer.concat([absent, Buffer.from([0x2a])]));
+    expect(absentReader.optionalSooid()).toBeNull();
+    expect(absentReader.integer()).toBe(42);
+    expect(absentReader.remaining).toBe(0);
+  });
+
+  test('other nullable scalars use a presence byte and preserve alignment', () => {
+    const cases: [number, unknown, (r: BinaryReader) => unknown][] = [
+      [10, 42, (r) => r.optionalInteger()],
+      [11, 42n, (r) => r.optionalLong()],
+      [13, Buffer.alloc(16, 0xab), (r) => r.optionalGuid()],
+      [15, 1.5, (r) => r.optionalDouble()],
+      [16, 1.5, (r) => r.optionalFloat()],
+      [17, 65, (r) => r.optionalChar()],
+      [18, 42n, (r) => r.optionalDateTime()],
+      [19, 3, (r) => r.optionalInteger()],
+    ];
+
+    for (const [propType, value, read] of cases) {
+      const encoded = serializeStructValue(propType, value);
+      expect(encoded[0]).toBe(1);
+      const r = new BinaryReader(Buffer.concat([encoded, Buffer.from([0x2a])]));
+      expect(read(r)).not.toBeNull();
+      expect(r.integer()).toBe(42);
+      expect(r.remaining).toBe(0);
+
+      const absent = serializeStructValue(propType, null);
+      expect(absent.toString('hex')).toBe('00');
+      const absentReader = new BinaryReader(Buffer.concat([absent, Buffer.from([0x2a])]));
+      expect(read(absentReader)).toBeNull();
+      expect(absentReader.integer()).toBe(42);
+      expect(absentReader.remaining).toBe(0);
+    }
+  });
 });
 
 // Collection encoding for IEnumerable<T>-of-structs params (FavoriteOrBan et al).
