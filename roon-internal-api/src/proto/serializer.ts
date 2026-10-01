@@ -60,6 +60,20 @@ export function buildArgs(args: Arg[]): Buffer {
  */
 export function serializeStructValue(propType: number, v: unknown): Buffer {
   const w = new BinaryWriter();
+  // Generated struct callers may supply already-framed nullable scalar bytes.
+  // NullableGuid and NullableSooid are exceptions: their ordinary semantic
+  // values are Buffers too, so they must still receive presence/length framing.
+  if (Buffer.isBuffer(v) && propType >= 10 && propType <= 19 && propType !== 13 && propType !== 14) {
+    return v;
+  }
+  if (propType >= 10 && propType <= 19) {
+    // NullableBool and NullableSooid have dedicated wire forms. The remaining
+    // nullable primitives use a presence byte followed by their base value.
+    if (propType === 12) return w.optionalBoolean(v as boolean | null).toBuffer();
+    if (propType === 14) return w.optionalSooid(v as Uint8Array | null).toBuffer();
+    if (v == null) return w.boolean(false).toBuffer();
+    return w.boolean(true).bytes(serializeStructValue(propType - 10, v)).toBuffer();
+  }
   if (Buffer.isBuffer(v) && propType !== 4 /*Sooid*/ && propType !== 21 /*ByteArray*/) {
     return v; // caller pre-serialized
   }
@@ -78,13 +92,7 @@ export function serializeStructValue(propType: number, v: unknown): Buffer {
     case 21: return w.byteArray(v as Uint8Array).toBuffer(); // ByteArray
     case 22: return w.byteArray(v as Uint8Array).toBuffer(); // Message
     case 23: return w.long(v as any).toBuffer(); // Object -> object id (flexlong)
-    default:
-      // Nullable* (10..19) bool-prefixed; unknown -> best effort.
-      if (propType >= 10 && propType <= 19) {
-        if (v == null) return w.boolean(false).toBuffer();
-        return w.boolean(true).bytes(serializeStructValue(propType - 10, v)).toBuffer();
-      }
-      return Buffer.isBuffer(v) ? v : w.toBuffer();
+    default: return Buffer.isBuffer(v) ? v : w.toBuffer();
   }
 }
 
