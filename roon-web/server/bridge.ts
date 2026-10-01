@@ -42,10 +42,12 @@ export async function search(roon: RoonClient, q: string): Promise<SearchResult>
   const empty: SearchResult = { albums: [], artists: [], playlists: [], genres: [], tracks: [], works: [] };
   if (term.length < 2) return empty;
 
-  const objects = await roon.search(term, 50);
+  const objects = await roon.search(term, 50, true);
   const seen = new Set<string>();
   const albums: AlbumRow[] = [];
   const artists: NamedRow[] = [];
+  const playlists: NamedRow[] = [];
+  const genres: NamedRow[] = [];
   const tracks: TrackRow[] = [];
   const works: NamedRow[] = [];
   for (const o of objects) {
@@ -62,13 +64,17 @@ export async function search(roon: RoonClient, q: string): Promise<SearchResult>
       artists.push({ oid: key, name: cleanLinks(name) });
     else if (o.typeName.endsWith('WorkLite') || o.typeName.endsWith('.Work'))
       works.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('.Playlist'))
+      playlists.push({ oid: key, name: cleanLinks(name) });
+    else if (o.typeName.endsWith('GenreLite') || o.typeName.endsWith('BrowserGenre'))
+      genres.push({ oid: key, name: cleanLinks(name) });
   }
 
   return {
     albums,
     artists,
-    playlists: [],
-    genres: [],
+    playlists,
+    genres,
     tracks,
     works,
   };

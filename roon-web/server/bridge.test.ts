@@ -38,15 +38,20 @@ test('search maps only the current UnifiedSearch result identities', async () =>
     { ...object(14n, 'Full Track'), typeName: 'Sooloos.Broker.Api.Track' },
     { ...object(15n, 'Full Artist'), typeName: 'Sooloos.Broker.Api.Performer' },
     { ...object(16n, 'Full Work'), typeName: 'Sooloos.Broker.Api.Work' },
+    { ...object(17n, 'Callback Playlist'), typeName: 'Sooloos.Broker.Api.Playlist' },
+    { ...object(18n, 'Callback Genre'), typeName: 'Sooloos.Broker.Api.GenreLite' },
+    { ...object(19n, 'Callback Browser Genre'), typeName: 'Sooloos.Broker.Api.BrowserGenre' },
   ];
   const roon = {
-    search: async (q: string) => {
+    search: async (q: string, maxCount: number, includePlaylistsAndGenres: boolean) => {
       assert.equal(q, 'current query');
+      assert.equal(maxCount, 50);
+      assert.equal(includePlaylistsAndGenres, true);
       return current;
     },
     graph: {
-      objects: new Map([['999', object(999n, 'Stale Graph Album')]]),
-      findByType: () => [object(999n, 'Stale Graph Album')],
+      objects: new Map([['999', { ...object(999n, 'Unrelated Cached Playlist'), typeName: 'Sooloos.Broker.Api.Playlist' }]]),
+      findByType: () => [{ ...object(999n, 'Unrelated Cached Playlist'), typeName: 'Sooloos.Broker.Api.Playlist' }],
     },
   };
 
@@ -55,6 +60,9 @@ test('search maps only the current UnifiedSearch result identities', async () =>
   assert.deepEqual(result.tracks.map((row) => row.oid), ['11', '14']);
   assert.deepEqual(result.artists.map((row) => row.oid), ['12', '15']);
   assert.deepEqual(result.works.map((row) => row.oid), ['13', '16']);
+  assert.deepEqual(result.playlists.map((row) => row.oid), ['17']);
+  assert.deepEqual(result.genres.map((row) => row.oid), ['18', '19']);
+  assert.equal(result.playlists.some((row) => row.oid === '999'), false);
 });
 
 test('concurrent repeated terms retain each SDK callback result identity set', async () => {
