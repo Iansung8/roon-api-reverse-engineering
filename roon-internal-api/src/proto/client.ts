@@ -14,9 +14,9 @@
  */
 import { RoonConnection } from './connection';
 import { RemotingClient, CallResult } from './remoting';
-import { ObjectGraph, RoonObject, isRef, PropertyType } from './objects';
+import { ObjectGraph, RoonObject, isRef, PropertyType, decodeRefList } from './objects';
 import { formatMethodSignature, CatalogParam } from '../catalog/signature';
-import { Arg, buildArgs } from './serializer';
+import { Arg, buildArgs, decodeStringTupleList, encodeStringDictList } from './serializer';
 import { structArg } from './structs';
 import { BinaryWriter } from './writer';
 import { BinaryReader } from './reader';
@@ -631,6 +631,116 @@ export class RoonClient {
       this.structArg(LIBRARY_EDIT, fields), this.serviceOid('Library'),
     );
   }
+
+  /**
+   * Per-track file tags for Metadata::GetMatchingEditions, in track order: the file's own tags
+   * (TrackExportInfo.FileTags) plus the keys the official client derives: TRACKNUMBERFROMFILENAME,
+   * LENGTH, LENGTHMS, MEDIANUMBER and ORIGINALPATH. Throws when a track does not resolve instead
+   * of passing placeholder values on to identifyAlbum.
+   */
+  async matchFilesForAlbum(albumOid: bigint): Promise<{ trackId: bigint; trackNumber: number; mediaNumber: number; tags: [string, string][] }[]> {
+    const infos = this.listResult(await this.remoting.callMethod(this.serviceOid('Library'),
+      'Sooloos.Broker.Api.Library::GetTrackExportInfoForAlbums(System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.AlbumBase>, Base.ResultCallback<System.Collections.Generic.IList<Sooloos.Broker.Api.TrackExportInfo>>)',
+      buildArgs([Arg.collection([buildArgs([Arg.ref(albumOid)])])]))) as Record<string, unknown>[];
+    const out = [];
+    for (const [i, info] of infos.entries()) {
+      const tl = await this.waitObject(member(info, '::Track'), 2000);
+      const trackId = tl && member(tl.fields, '::TrackId');
+      if (!tl || trackId === undefined || trackId === null) {
+        throw new Error(`matchFilesForAlbum: track ${i + 1} of ${infos.length} did not resolve`);
+      }
+      const raw = member(info, '::FileTags');
+      const tags = raw instanceof Uint8Array ? decodeStringTupleList(raw) : [];
+      const path = String(member(info, '::FilePath') ?? '');
+      const seconds = Number(member(tl.fields, '::LengthSeconds') || 0);
+      const trackNumber = Number(member(tl.fields, '::TrackNumber') || 0);
+      const mediaNumber = Number(member(tl.fields, '::MediaNumber') || 1);
+      const fromName = /^(\d+)/.exec(path.split('/').pop() ?? '')?.[1];
+      const extra: [string, string][] = [
+        ...(fromName ? [['TRACKNUMBERFROMFILENAME', String(Number(fromName))] as [string, string]] : []),
+        ['LENGTH', String(seconds)], ['LENGTHMS', String(seconds * 1000)], ['MEDIANUMBER', String(mediaNumber)], ['ORIGINALPATH', path],
+      ];
+      // FileTags can repeat a key (e.g. two COMPOSER tags). An IDictionary cannot, and the Core answers
+      // UnexpectedError, so repeated values are joined with "; ".
+      const merged = new Map<string, string>();
+      for (const [k, v] of tags) merged.set(k, merged.has(k) ? `${merged.get(k)}; ${v}` : v);
+      for (const [k, v] of extra) if (!merged.has(k)) merged.set(k, v);
+      out.push({ trackId: BigInt(String(trackId)), trackNumber, mediaNumber, tags: [...merged.entries()] });
+    }
+    return out;
+  }
+
+  /**
+   * Metadata::GetMatchingEditions: ask which editions of a release fit these files (`metadataAlbumId` is
+   * a candidate's AlbumLite.AlbumId from Metadata::UserSearch). Returns each edition's id, confidence,
+   * title and tracks. MatchingEdition.Tracks lists every track of the edition in release order; it is
+   * not a per-file mapping (three files came back with 46- and 60-track editions). Pair files with
+   * release tracks yourself, e.g. with pairFilesWithEdition.
+   */
+  async getMatchingEditions(metadataAlbumId: bigint, files: [string, string][][]): Promise<{
+    editionId: bigint | null; confidence: number | undefined; releaseTitle: string | undefined;
+    releaseTracks: ReleaseTrack[]; raw: Record<string, unknown>;
+  }[]> {
+    const res = await this.remoting.callMethod(this.serviceOid('Metadata'),
+      'Sooloos.Broker.Api.Metadata::GetMatchingEditions(long, System.Collections.Generic.IEnumerable<System.Collections.Generic.IDictionary<string, string>>, Base.ResultCallback<System.Collections.Generic.IList<Sooloos.Broker.Api.MatchingEdition>>)',
+      Buffer.concat([buildArgs([Arg.long(metadataAlbumId)]), encodeStringDictList(files)]));
+    const out = [];
+    for (const e of this.listResult(res) as Record<string, unknown>[]) {
+      const releaseTracks: ReleaseTrack[] = [];
+      for (const r of decodeRefList(member(e, '::Tracks'))) {
+        const t = await this.waitObject(r, 2000);
+        const id = t && member(t.fields, '::TrackId');
+        if (!t || id === undefined || id === null) throw new Error(`getMatchingEditions: release track ${r.$ref} did not resolve`);
+        const title = member(t.fields, '::Title');
+        const seconds = member(t.fields, '::LengthSeconds');
+        releaseTracks.push({
+          trackId: BigInt(String(id)), title: typeof title === 'string' ? title : null,
+          disc: Number(member(t.fields, '::MediaNumber') ?? 1) || 1, no: Number(member(t.fields, '::TrackNumber') ?? 0),
+          seconds: seconds === undefined || seconds === null ? null : Number(seconds),
+        });
+      }
+      const editionId = member(e, '::AlbumEditionId');
+      const confidence = member(e, '::Confidence');
+      const releaseTitle = member(e, '::ReleaseTitle');
+      out.push({
+        editionId: editionId === undefined || editionId === null ? null : BigInt(String(editionId)),
+        confidence: typeof confidence === 'number' ? confidence : undefined,
+        releaseTitle: typeof releaseTitle === 'string' ? releaseTitle : undefined,
+        releaseTracks, raw: e,
+      });
+    }
+    return out;
+  }
+}
+
+/** One track of a release edition, as returned by RoonClient.getMatchingEditions. */
+export interface ReleaseTrack { trackId: bigint; title: string | null; disc: number; no: number; seconds: number | null }
+
+const normTitle = (s: string | null | undefined) => (s ?? '').normalize('NFKC').toLowerCase().replace(/[\s\p{P}]/gu, '');
+
+/**
+ * Pair an album's files (from matchFilesForAlbum) with an edition's release tracks: same disc and track
+ * number, confirmed by an equal title (after normalization) or a length within 2 seconds. Each release
+ * track pairs at most once. `complete` is true only when every file found its track.
+ */
+export function pairFilesWithEdition(
+  files: { trackId: bigint; trackNumber: number; mediaNumber: number; tags: [string, string][] }[],
+  releaseTracks: ReleaseTrack[],
+): { pairs: { trackId: bigint; metadataTrackId: bigint | null; reason: string | null }[]; complete: boolean } {
+  const used = new Set<bigint>();
+  const pairs = files.map((f) => {
+    const tags = Object.fromEntries(f.tags);
+    const seconds = tags.LENGTH === undefined ? null : Number(tags.LENGTH);
+    const r = releaseTracks.find((x) => x.disc === (f.mediaNumber || 1) && x.no === f.trackNumber);
+    if (!r) return { trackId: f.trackId, metadataTrackId: null, reason: 'no release track at this position' };
+    const titleOk = normTitle(tags.TITLE) !== '' && normTitle(tags.TITLE) === normTitle(r.title);
+    const lengthOk = seconds !== null && r.seconds !== null && Math.abs(seconds - r.seconds) <= 2;
+    if (used.has(r.trackId)) return { trackId: f.trackId, metadataTrackId: null, reason: 'release track already paired' };
+    if (!titleOk && !lengthOk) return { trackId: f.trackId, metadataTrackId: null, reason: 'title and length differ' };
+    used.add(r.trackId);
+    return { trackId: f.trackId, metadataTrackId: r.trackId, reason: null };
+  });
+  return { pairs, complete: pairs.length > 0 && pairs.every((p) => p.metadataTrackId !== null) };
 }
 
 /** Reversible album metadata edits (see RoonClient.editAlbum). */

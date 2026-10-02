@@ -1,9 +1,10 @@
-import { RoonClient, parseAlbumEditInfo } from './client';
+import { RoonClient, pairFilesWithEdition, parseAlbumEditInfo } from './client';
 import { RemotingClient, Cmd, Transport } from './remoting';
 import { FrameParser, encodeResponse } from './frame';
 import { BinaryWriter } from './writer';
 import { BinaryReader } from './reader';
 import { RoonObject, PropertyType } from './objects';
+import { encodeStringDictList } from './serializer';
 import { LibraryApi, TransportApi } from '../generated/api';
 
 class MockTransport implements Transport {
@@ -625,5 +626,107 @@ describe('album edit info', () => {
     expect(declaredTypes(t).get(w.typeId)!.members[w.body.flexInt() - 1].name).toContain('::ClearEdits');
     expect(w.body.boolean()).toBe(true);
     expect(() => c.editAlbum(17n, { title: 'x', clearTitle: true })).toThrow();
+  });
+});
+
+describe('identification helpers', () => {
+  const ME = 'Sooloos.Broker.Api.MatchingEdition';
+  const TEI = 'Sooloos.Broker.Api.TrackExportInfo';
+  const TL = 'Sooloos.Broker.Api.TrackLite';
+  const calls = (t: MockTransport) => t.sentFrames().filter((f) => f.cmd === Cmd.CALL);
+  const inline = (typeId: number, fields: Buffer) => new BinaryWriter().long(1).integer(typeId).integer(fields.length).bytes(fields).toBuffer();
+  const list = (items: Buffer[]) => {
+    const body = Buffer.concat([new BinaryWriter().flexInt(items.length).toBuffer(), ...items]);
+    return Buffer.concat([new BinaryWriter().flexInt(body.length).toBuffer(), body]);
+  };
+  const respond = (t: MockTransport, payload: Buffer) =>
+    t.deliver(encodeResponse(calls(t).at(-1)!.rid!, Buffer.concat([new BinaryWriter().string('').toBuffer(), payload]), true));
+
+  test('getMatchingEditions sends one tag dictionary per file and returns the release tracks', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    seed(c, 114n, 'Sooloos.Broker.Api.Metadata');
+    seed(c, 700n, TL, { [`long ${TL}::TrackId`]: 2200001n, [`string ${TL}::Title`]: 'One', [`int ${TL}::MediaNumber`]: 1, [`int ${TL}::TrackNumber`]: 1, [`int ${TL}::LengthSeconds`]: 200 });
+    seed(c, 701n, TL, { [`long ${TL}::TrackId`]: 2200002n, [`string ${TL}::Title`]: 'Two', [`int ${TL}::MediaNumber`]: 1, [`int ${TL}::TrackNumber`]: 2, [`int ${TL}::LengthSeconds`]: 180 });
+    c.graph.types.set(910, { id: 910, name: ME, members: [
+      { name: `long? ${ME}::AlbumEditionId`, propType: PropertyType.NullableLong },
+      { name: `System.Collections.Generic.IList<${TL}> ${ME}::Tracks`, propType: PropertyType.LengthPrefixed },
+      { name: `int ${ME}::Confidence`, propType: PropertyType.Int },
+      { name: `string ${ME}::ReleaseTitle`, propType: PropertyType.String },
+    ] });
+    const files: [string, string][][] = [[['TITLE', 'One']], [['TITLE', 'Two']]];
+    const pending = c.getMatchingEditions(1234567n, files);
+
+    const sent = new BinaryReader(calls(t).at(-1)!.body);
+    expect(sent.long()).toBe(114n);
+    sent.flexInt(); // method id
+    expect(sent.long()).toBe(1234567n);
+    expect(Buffer.from(sent.buf.subarray(sent.pos))).toEqual(encodeStringDictList(files));
+
+    const refs = new BinaryWriter().flexInt(2).long(700).long(701).toBuffer(); // every track of the edition, in release order
+    const fields = new BinaryWriter()
+      .flexInt(1).boolean(true).long(1234568)
+      .flexInt(2).integer(refs.length).bytes(refs)
+      .flexInt(3).integer(95)
+      .flexInt(4).string('Release')
+      .flexInt(0).toBuffer();
+    respond(t, list([inline(910, fields)]));
+    const [edition] = await pending;
+    expect(edition).toMatchObject({ editionId: 1234568n, confidence: 95, releaseTitle: 'Release' });
+    expect(edition.releaseTracks).toEqual([
+      { trackId: 2200001n, title: 'One', disc: 1, no: 1, seconds: 200 },
+      { trackId: 2200002n, title: 'Two', disc: 1, no: 2, seconds: 180 },
+    ]);
+  });
+
+  test('pairFilesWithEdition pairs by disc and track number, confirmed by title or length', () => {
+    const release = [
+      { trackId: 2200001n, title: 'One', disc: 1, no: 1, seconds: 200 },
+      { trackId: 2200002n, title: 'Two', disc: 1, no: 2, seconds: 180 },
+      { trackId: 2200003n, title: 'Three', disc: 1, no: 3, seconds: 240 },
+    ];
+    const file = (trackId: bigint, no: number, title: string, length: number) =>
+      ({ trackId, trackNumber: no, mediaNumber: 1, tags: [['TITLE', title], ['LENGTH', String(length)]] as [string, string][] });
+    // a partial album: two of three tracks, one with a romanized title but the right length
+    const partial = pairFilesWithEdition([file(1n, 1, 'one', 200), file(2n, 3, 'San', 241)], release);
+    expect(partial.complete).toBe(true);
+    expect(partial.pairs.map((p) => p.metadataTrackId)).toEqual([2200001n, 2200003n]);
+    // same position but a different song: neither title nor length agrees
+    const wrong = pairFilesWithEdition([file(1n, 2, 'Other', 300)], release);
+    expect(wrong.complete).toBe(false);
+    expect(wrong.pairs[0]).toMatchObject({ metadataTrackId: null, reason: 'title and length differ' });
+  });
+
+  test('matchFilesForAlbum merges repeated tags, adds derived keys and refuses unresolved tracks', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    seed(c, 701n, TL, {
+      [`long ${TL}::TrackId`]: 1100001n, [`int ${TL}::TrackNumber`]: 1, [`int ${TL}::MediaNumber`]: 1, [`int ${TL}::LengthSeconds`]: 352,
+    });
+    c.graph.types.set(911, { id: 911, name: TEI, members: [
+      { name: `${TL} ${TEI}::Track`, propType: PropertyType.Object },
+      { name: `string ${TEI}::FilePath`, propType: PropertyType.String },
+      { name: `System.Collections.Generic.IList<System.Tuple<string, string>> ${TEI}::FileTags`, propType: PropertyType.LengthPrefixed },
+    ] });
+    const tuple = (k: string, v: string) => { const b = new BinaryWriter().string(k).string(v).toBuffer(); return new BinaryWriter().flexInt(b.length).bytes(b).toBuffer(); };
+    const tags = Buffer.concat([new BinaryWriter().flexInt(3).toBuffer(), tuple('TITLE', 'A'), tuple('COMPOSER', 'X'), tuple('COMPOSER', 'Y')]);
+    const info = (trackRef: number) => inline(911, new BinaryWriter()
+      .flexInt(1).long(trackRef)
+      .flexInt(2).string('/music/Album/01 A.flac')
+      .flexInt(3).integer(tags.length).bytes(tags)
+      .flexInt(0).toBuffer());
+
+    const ok = c.matchFilesForAlbum(500n);
+    respond(t, list([info(701)]));
+    const [file] = await ok;
+    expect(file.trackId).toBe(1100001n);
+    expect(file.tags).toEqual([
+      ['TITLE', 'A'], ['COMPOSER', 'X; Y'], ['TRACKNUMBERFROMFILENAME', '1'], ['LENGTH', '352'],
+      ['LENGTHMS', '352000'], ['MEDIANUMBER', '1'], ['ORIGINALPATH', '/music/Album/01 A.flac'],
+    ]);
+
+    const missing = c.matchFilesForAlbum(500n);
+    respond(t, list([info(702)])); // TrackLite 702 never arrives
+    await expect(missing).rejects.toThrow(/did not resolve/);
   });
 });
