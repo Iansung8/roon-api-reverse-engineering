@@ -30,6 +30,7 @@ roon-api-reverse-engineering/
 │  ├─ src/catalog/           signatures + the extracted method catalog (~1550 methods)
 │  ├─ src/generated/         generated typed API (one class per service)
 │  ├─ oracle/                C# tool: reads the Roon DLLs → the catalog JSON
+│  ├─ src/capture/           pcapng reader, call decoder, method guesser (dev tooling, not built)
 │  ├─ tools/                 codegen + capture-decoding scripts
 │  └─ examples/              runnable PoCs (one per thing that works)
 ├─ roon-web/                 a small web client poking at the API
@@ -84,6 +85,40 @@ sudo tcpdump -i en0 -w captures/<operation>.pcap host <CORE_IP> and port 9332
 Reassemble and decode streams with the helpers in `tools/` (`parse_stream.py`,
 `decode_query.py`) — see each script's header. Diffing your capture against a known one is
 the fastest way to isolate the new bytes.
+
+`roon-internal-api/tools/decode_capture.ts` turns a **pcapng** capture into method calls with
+decoded arguments and their responses. Wireshark and `tshark -w` save pcapng; convert a
+tcpdump `.pcap` with `editcap -F pcapng in.pcap out.pcapng`. Keep captures and decoded output
+under `captures/`, which git ignores: they contain your library data.
+
+```bash
+cd roon-internal-api
+npx ts-node -T tools/decode_capture.ts ../captures/<operation>.pcapng --grep "Library::Edit"
+```
+
+The client assigns a method id the first time it uses a method on a connection and declares
+it (`DEFMETHOD`) only once. If the capture started after the desktop client connected
+(closing its window does not always quit it), those calls show only a method id.
+`tools/guess_methods.ts` ranks catalog signatures that decode every such call exactly; feed
+its output back with `--guesses`:
+
+```bash
+npx ts-node -T tools/decode_capture.ts ../captures/<operation>.pcapng --json ../captures/<operation>.json
+npx ts-node -T tools/guess_methods.ts ../captures/<operation>.json --out ../captures/<operation>-guesses.json
+npx ts-node -T tools/decode_capture.ts ../captures/<operation>.pcapng --guesses ../captures/<operation>-guesses.json --markdown ../captures/<operation>-calls.md
+```
+
+On Windows, the built-in `pktmon` captures without extra installs (run elevated from the
+repository root):
+
+```powershell
+pktmon filter add Roon9332 -t TCP -p 9332
+pktmon start --capture --comp nics --pkt-size 0 -f captures\<operation>.etl
+# quit and restart the Roon desktop app, perform the operation, then:
+pktmon stop
+pktmon etl2pcap captures\<operation>.etl --out captures\<operation>.pcapng
+pktmon filter remove
+```
 
 ## Running the checks
 

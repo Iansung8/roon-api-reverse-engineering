@@ -168,7 +168,8 @@ export class ObjectGraph {
   }
 
   /** Read one member value per its PropertyType (ported from PropertyMapping). */
-  private readValue(r: BinaryReader, t: PropertyType): unknown {
+  /** Read one value of the given PropertyType. Public for the capture decoder (src/capture/decode.ts). */
+  readValue(r: BinaryReader, t: PropertyType): unknown {
     switch (t) {
       case PropertyType.Int: return r.integer();
       case PropertyType.Long: return r.long();
