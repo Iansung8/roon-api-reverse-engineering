@@ -1,6 +1,7 @@
-# Captures (may contain personal library data)
-captures/*.pcap
-captures/*.har
+# Captures and decoded output (may contain personal library data)
+captures/*
+*.pcapng
+*.etl
 
 # Keep the directory
 !captures/.gitkeep
