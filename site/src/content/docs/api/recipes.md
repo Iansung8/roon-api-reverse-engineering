@@ -83,6 +83,49 @@ Edits change real metadata. They're reversible (set → read back → restore), 
 something disposable first.
 :::
 
+## Merge, identify and set the primary version
+
+These are the structural edits the desktop client makes through `Library::Edit`. Each one
+follows the shape seen in official-client captures and was replayed against a live Core
+(Roon 2.73 build 1696). They change how the library is grouped, so take a backup first.
+
+```ts
+// merge tracks into a new album (pass an existing AlbumId as the second argument to move them there)
+await roon.mergeTracks([
+  { trackId: firstTrackId, trackNumber: 1, mediaNumber: 1 },
+  { trackId: secondTrackId, trackNumber: 2, mediaNumber: 1 },
+]);
+
+// identify an album: fetch a release's editions, pair the files with one, then apply it
+const files = await roon.matchFilesForAlbum(albumOid);          // session oid of the album
+const editions = await roon.getMatchingEditions(releaseId, files.map((f) => f.tags));
+const edition = editions[0];                                    // choose by confidence
+const { pairs, complete } = pairFilesWithEdition(files, edition.releaseTracks);
+if (edition.editionId === null || !complete) throw new Error('not every file pairs with this edition');
+await roon.identifyAlbum(albumId, edition.editionId,
+  pairs.map((p) => ({ trackId: p.trackId, metadataTrackId: p.metadataTrackId! })));
+
+// make one copy of a release the primary version; the others point at it
+await roon.setPrimaryVersion(primaryAlbumId, [otherAlbumId]);
+```
+
+- `releaseId` is a candidate's `AlbumLite.AlbumId` from `Metadata::UserSearch`; the chosen
+  edition's id is what gets applied as `MetadataAlbumId`.
+- `edition.releaseTracks` is every track of the edition, not a per-file mapping.
+  `pairFilesWithEdition` (exported from `roon-internal-api`) pairs files by disc and track
+  number and confirms each pair by title or length.
+- Without a target, `mergeTracks` sends a temporary album id (counter × 256 + 30), as the
+  desktop client does, and the Core creates the album.
+- Roon re-attaches an old track's edits to a new file with identical audio, so re-imported
+  files can land in an album from an earlier merge. Move them with another `mergeTracks`.
+- Merges into disc numbers above 1 have not been run against a live Core yet.
+
+:::danger[clearTrackEdits]
+`roon.clearTrackEdits(trackIds)` sends `ClearMetadataEdits`: it removes the user's edits on
+those tracks (such as track and disc numbers) and cannot be undone except from a backup.
+It does not undo a merge; album membership stays where the merge put it.
+:::
+
 ## Search
 
 ```ts

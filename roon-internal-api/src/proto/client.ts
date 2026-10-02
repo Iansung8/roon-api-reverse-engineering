@@ -612,6 +612,14 @@ export class RoonClient {
     ]);
   }
 
+  /** One TrackEdit: the TrackId plus the Edit* members to change. */
+  private trackEditStruct(trackId: bigint, fields: StructField[]): Buffer {
+    return this.structArg(TRACK_EDIT, [
+      { name: `long ${TRACK_EDIT}::TrackId`, propType: PropertyType.Long, value: new BinaryWriter().long(trackId).toBuffer() },
+      ...fields,
+    ]);
+  }
+
   /**
    * Send one Library::Edit. LibraryEdit::Albums and ::Tracks are IList members whose wire form is
    * LengthPrefixed: integer(len) + flexInt(count) + inline structs (confirmed against official-client captures).
@@ -711,6 +719,91 @@ export class RoonClient {
     }
     return out;
   }
+
+  /** An Edit* wrapper member: `type` is the closed wrapper type (e.g. EditOptionalVal<long>), `members` the fields to set. */
+  private editWrapper(owner: string, member: string, type: string, members: StructField[]): StructField {
+    return { name: `${type} ${owner}::${member}`, propType: PropertyType.Object, value: this.structArg(type, members) };
+  }
+
+  /** AlbumLite reference via Library::GetAlbumLite(long). DuplicateOf takes an AlbumLite, not the Album that GetAlbum returns. */
+  async getAlbumLiteRef(albumId: bigint): Promise<bigint> {
+    const res = await this.remoting.callMethod(
+      this.serviceOid('Library'),
+      'Sooloos.Broker.Api.Library::GetAlbumLite(long, Base.ResultCallback<Sooloos.Broker.Api.AlbumLite>)',
+      buildArgs([Arg.long(albumId)]),
+    );
+    const v = res.success ? this.graph.decodeReturnValue(Uint8Array.from(res.payload)) : undefined;
+    if (!isRef(v)) throw new Error(`GetAlbumLite(${albumId}) failed: ${res.status}`);
+    return v.$ref;
+  }
+
+  /**
+   * Make one copy of a release the primary version (the Library::Edit shape seen in official-client
+   * captures). The primary's DuplicateOf is cleared (ClearBaseValue + ClearEdits) and every other
+   * album's DuplicateOf points at the primary's AlbumLite.
+   */
+  async setPrimaryVersion(primaryAlbumId: bigint, otherAlbumIds: bigint[]): Promise<CallResult> {
+    const primaryLite = await this.getAlbumLiteRef(primaryAlbumId);
+    const T = EDIT_OPTIONAL_REF_ALBUMLITE;
+    const clear = this.editWrapper(ALBUM_EDIT, 'DuplicateOf', T, [
+      { name: `bool? ${T}::ClearBaseValue`, propType: PropertyType.NullableBool, value: new BinaryWriter().optionalBoolean(true).toBuffer() },
+      { name: `bool ${T}::ClearEdits`, propType: PropertyType.Bool, value: new BinaryWriter().boolean(true).toBuffer() },
+    ]);
+    const pointTo = this.editWrapper(ALBUM_EDIT, 'DuplicateOf', T, [
+      { name: `Sooloos.Broker.Api.AlbumLite ${T}::EditValue`, propType: PropertyType.Object, value: new BinaryWriter().long(primaryLite).toBuffer() },
+    ]);
+    return this.sendLibraryEdit([
+      this.albumEditStruct(primaryAlbumId, [clear]),
+      ...otherAlbumIds.map((id) => this.albumEditStruct(id, [pointTo])),
+    ], []);
+  }
+
+  private tempAlbumCounter = 0;
+
+  /**
+   * Merge tracks into one album (the Library::Edit shape seen in an official-client capture): every
+   * TrackEdit.AlbumId gets the same value and TrackNumber/MediaNumber are set to the given values.
+   * Without `targetAlbumId` a temporary id (counter * 256 + 30, e.g. 1822 in the capture) asks the
+   * Core to create a new album, as the official client does; an existing AlbumId moves the tracks there.
+   */
+  mergeTracks(tracks: { trackId: bigint; trackNumber: number; mediaNumber: number }[], targetAlbumId?: bigint): Promise<CallResult> {
+    const target = targetAlbumId ?? ((BigInt(++this.tempAlbumCounter) << 8n) | 30n);
+    const L = EDIT_REQUIRED_VAL_LONG;
+    const I = EDIT_REQUIRED_VAL_INT;
+    const intVal = (v: number) => new BinaryWriter().boolean(true).integer(v).toBuffer();
+    return this.sendLibraryEdit([], tracks.map((t) => this.trackEditStruct(t.trackId, [
+      this.editWrapper(TRACK_EDIT, 'AlbumId', L, [{ name: `long? ${L}::EditValue`, propType: PropertyType.NullableLong, value: new BinaryWriter().boolean(true).long(target).toBuffer() }]),
+      this.editWrapper(TRACK_EDIT, 'TrackNumber', I, [{ name: `int? ${I}::EditValue`, propType: PropertyType.NullableInt, value: intVal(t.trackNumber) }]),
+      this.editWrapper(TRACK_EDIT, 'MediaNumber', I, [{ name: `int? ${I}::EditValue`, propType: PropertyType.NullableInt, value: intVal(t.mediaNumber) }]),
+    ])));
+  }
+
+  /**
+   * Apply an identification (the Library::Edit shape seen in official-client captures):
+   * AlbumEdit.MetadataAlbumId is set to the chosen edition and each TrackEdit.MetadataTrackId to the
+   * release track it was paired with (see getMatchingEditions and pairFilesWithEdition).
+   */
+  identifyAlbum(albumId: bigint, metadataAlbumId: bigint, tracks: { trackId: bigint; metadataTrackId: bigint }[]): Promise<CallResult> {
+    const V = EDIT_OPTIONAL_VAL_LONG;
+    const longVal = (v: bigint) => new BinaryWriter().boolean(true).long(v).toBuffer();
+    const album = this.albumEditStruct(albumId, [this.editWrapper(ALBUM_EDIT, 'MetadataAlbumId', V, [
+      { name: `bool? ${V}::ClearBaseValue`, propType: PropertyType.NullableBool, value: new BinaryWriter().optionalBoolean(false).toBuffer() },
+      { name: `long? ${V}::EditValue`, propType: PropertyType.NullableLong, value: longVal(metadataAlbumId) },
+    ])]);
+    return this.sendLibraryEdit([album], tracks.map((t) => this.trackEditStruct(t.trackId, [
+      this.editWrapper(TRACK_EDIT, 'MetadataTrackId', V, [{ name: `long? ${V}::EditValue`, propType: PropertyType.NullableLong, value: longVal(t.metadataTrackId) }]),
+    ])));
+  }
+
+  /**
+   * Clear user edits on tracks (TrackEdit.ClearMetadataEdits) so they fall back to file tags and Roon
+   * metadata. Not reversible except from a backup. Album membership set by a merge is not reverted.
+   */
+  clearTrackEdits(trackIds: bigint[]): Promise<CallResult> {
+    return this.sendLibraryEdit([], trackIds.map((id) => this.trackEditStruct(id, [
+      { name: `bool ${TRACK_EDIT}::ClearMetadataEdits`, propType: PropertyType.Bool, value: new BinaryWriter().boolean(true).toBuffer() },
+    ])));
+  }
 }
 
 /** One track of a release edition, as returned by RoonClient.getMatchingEditions. */
@@ -763,6 +856,10 @@ const EDIT_REQUIRED_REF_STR = 'Sooloos.Broker.Api.EditRequiredRef<string>';
 const EDIT_LIST_STR = 'Sooloos.Broker.Api.EditList<string>';
 const LIBRARY_EDIT = 'Sooloos.Broker.Api.LibraryEdit';
 const TRACK_EDIT = 'Sooloos.Broker.Api.TrackEdit';
+const EDIT_OPTIONAL_VAL_LONG = 'Sooloos.Broker.Api.EditOptionalVal<long>';
+const EDIT_REQUIRED_VAL_LONG = 'Sooloos.Broker.Api.EditRequiredVal<long>';
+const EDIT_REQUIRED_VAL_INT = 'Sooloos.Broker.Api.EditRequiredVal<int>';
+const EDIT_OPTIONAL_REF_ALBUMLITE = 'Sooloos.Broker.Api.EditOptionalRef<Sooloos.Broker.Api.AlbumLite>';
 
 // --- AlbumEditInfo decoding (by-value return) ---
 

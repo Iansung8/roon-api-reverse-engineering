@@ -730,3 +730,101 @@ describe('identification helpers', () => {
     await expect(missing).rejects.toThrow(/did not resolve/);
   });
 });
+
+describe('structural Library::Edit operations', () => {
+  /** Decode the latest Library::Edit argument using the struct types this client declared. */
+  function sentLibraryEdit(t: MockTransport): Record<string, any> {
+    const types = declaredTypes(t);
+    const readObject = (r: BinaryReader): unknown => {
+      const marker = r.long();
+      if (marker !== 1n) return { $ref: marker };
+      const type = types.get(r.flexInt())!;
+      const body = new BinaryReader(r.bytes(r.flexInt()));
+      const out: Record<string, unknown> = {};
+      for (let idx = body.flexInt(); idx !== 0; idx = body.flexInt()) {
+        const m = type.members[idx - 1];
+        out[m.name.slice(m.name.lastIndexOf('::') + 2)] = readMember(body, m.propType);
+      }
+      return out;
+    };
+    const readMember = (r: BinaryReader, propType: number): unknown => {
+      switch (propType) {
+        case PropertyType.Long: return r.long();
+        case PropertyType.Bool: return r.boolean();
+        case PropertyType.NullableInt: return r.optionalInteger();
+        case PropertyType.NullableLong: return r.optionalLong();
+        case PropertyType.NullableBool: return r.optionalBoolean();
+        case PropertyType.Object: return readObject(r);
+        case PropertyType.LengthPrefixed: {
+          const items = new BinaryReader(r.bytes(r.integer()));
+          return Array.from({ length: items.flexInt() }, () => readObject(items));
+        }
+        default: throw new Error(`unexpected propType ${propType}`);
+      }
+    };
+    const call = new BinaryReader(t.sentFrames().filter((f) => f.cmd === Cmd.CALL).at(-1)!.body);
+    call.long(); // Library service oid
+    call.flexInt(); // method id
+    return readObject(call) as Record<string, any>;
+  }
+
+  test('mergeTracks points every AlbumId at one temporary id and sets the given numbers', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.mergeTracks([
+      { trackId: 1100001n, trackNumber: 1, mediaNumber: 1 },
+      { trackId: 1100002n, trackNumber: 4, mediaNumber: 2 },
+    ]);
+    await completeLatestCall(t, p);
+    const v = sentLibraryEdit(t);
+    expect(v.Albums).toBeUndefined();
+    expect(v.Tracks).toEqual([
+      { TrackId: 1100001n, AlbumId: { EditValue: 286n }, TrackNumber: { EditValue: 1 }, MediaNumber: { EditValue: 1 } },
+      { TrackId: 1100002n, AlbumId: { EditValue: 286n }, TrackNumber: { EditValue: 4 }, MediaNumber: { EditValue: 2 } },
+    ]); // 286 = 1 * 256 + 30
+  });
+
+  test('mergeTracks into an existing album sends that AlbumId', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.mergeTracks([{ trackId: 1100001n, trackNumber: 7, mediaNumber: 1 }], 3000047n);
+    await completeLatestCall(t, p);
+    expect(sentLibraryEdit(t).Tracks[0].AlbumId).toEqual({ EditValue: 3000047n });
+  });
+
+  test('clearTrackEdits sends only ClearMetadataEdits per TrackEdit', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.clearTrackEdits([1100001n, 1100002n]);
+    await completeLatestCall(t, p);
+    expect(sentLibraryEdit(t).Tracks).toEqual([
+      { TrackId: 1100001n, ClearMetadataEdits: true },
+      { TrackId: 1100002n, ClearMetadataEdits: true },
+    ]);
+  });
+
+  test('identifyAlbum sets MetadataAlbumId and each MetadataTrackId', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.identifyAlbum(3000047n, 1234568n, [{ trackId: 1100001n, metadataTrackId: 2200001n }]);
+    await completeLatestCall(t, p);
+    const v = sentLibraryEdit(t);
+    expect(v.Albums).toEqual([{ AlbumId: 3000047n, MetadataAlbumId: { ClearBaseValue: false, EditValue: 1234568n } }]);
+    expect(v.Tracks).toEqual([{ TrackId: 1100001n, MetadataTrackId: { EditValue: 2200001n } }]);
+  });
+
+  test('setPrimaryVersion clears the primary DuplicateOf and points the others at its AlbumLite', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.setPrimaryVersion(3000047n, [3000303n]);
+    // The first call is GetAlbumLite(long); answer it with an AlbumLite reference.
+    const firstCall = t.sentFrames().filter((f) => f.cmd === Cmd.CALL)[0];
+    t.deliver(encodeResponse(firstCall.rid!, Buffer.concat([new BinaryWriter().string('').toBuffer(), new BinaryWriter().long(65823).toBuffer()]), true));
+    while (t.sentFrames().filter((f) => f.cmd === Cmd.CALL).length < 2) await new Promise((r) => setImmediate(r));
+    await completeLatestCall(t, p);
+    expect(sentLibraryEdit(t).Albums).toEqual([
+      { AlbumId: 3000047n, DuplicateOf: { ClearBaseValue: true, ClearEdits: true } },
+      { AlbumId: 3000303n, DuplicateOf: { EditValue: { $ref: 65823n } } },
+    ]);
+  });
+});
