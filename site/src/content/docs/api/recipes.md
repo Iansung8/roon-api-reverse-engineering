@@ -68,6 +68,10 @@ await roon.editAlbum(albumId, {
 });
 ```
 
+In the edit info, `edited` means the user changed that field: `editValue` is set, or for
+lists `AddValues`/`RemoveValues` are non-empty. `hasEditLayer` only says the album has an
+edit layer, which albums nobody touched can have too.
+
 Get the durable `albumId` (distinct from the session oid) with `roon.albumIdOf(album)`.
 `examples/edit-album.ts`, `examples/album-edit-info.ts`.
 

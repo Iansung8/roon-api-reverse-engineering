@@ -1,4 +1,4 @@
-import { RoonClient } from './client';
+import { RoonClient, parseAlbumEditInfo } from './client';
 import { RemotingClient, Cmd, Transport } from './remoting';
 import { FrameParser, encodeResponse } from './frame';
 import { BinaryWriter } from './writer';
@@ -586,5 +586,31 @@ describe('album queries', () => {
     expect(calls()[4].rid).toBeNull();
     const methods = t.sentFrames().filter((f) => f.cmd !== Cmd.CALL && f.cmd !== Cmd.DEFTYPE).map((f) => f.body.toString('latin1'));
     expect(methods.some((m) => m.includes('VirtualAlbumLiteQuery::Dispose()'))).toBe(true);
+  });
+});
+
+describe('album edit info', () => {
+  const T = 'Sooloos.Broker.Api.EditRequiredRefInfo<string>';
+  const L = 'Sooloos.Broker.Api.EditListInfo<string>';
+  const stringList = (...xs: string[]) => {
+    const w = new BinaryWriter().flexInt(xs.length);
+    for (const x of xs) w.string(x);
+    return w.toBuffer();
+  };
+
+  test('edited follows EditValue/AddValues, not HasEditLayer', () => {
+    const untouched = parseAlbumEditInfo({
+      [`${T} X::Title`]: { [`string ${T}::Value`]: 'Original Title', [`bool ${T}::HasEditLayer`]: true },
+      [`${L} X::Genres`]: { [`${L}::Values`]: stringList('Pop'), [`bool ${L}::HasEditLayer`]: true },
+    });
+    expect(untouched.title).toMatchObject({ value: 'Original Title', edited: false, hasEditLayer: true });
+    expect(untouched.genres).toMatchObject({ edited: false, hasEditLayer: true });
+
+    const edited = parseAlbumEditInfo({
+      [`${T} X::Title`]: { [`string ${T}::Value`]: 'B', [`string ${T}::EditValue`]: 'B', [`bool ${T}::HasEditLayer`]: true },
+      [`${L} X::Genres`]: { [`${L}::AddValues`]: stringList('Jazz') },
+    });
+    expect(edited.title).toMatchObject({ value: 'B', editValue: 'B', edited: true });
+    expect(edited.genres.edited).toBe(true);
   });
 });

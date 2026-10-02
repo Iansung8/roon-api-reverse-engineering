@@ -645,8 +645,12 @@ export interface EditField<T> {
   value: T | undefined;
   /** the metadata (publisher) value, before any local/user edit. */
   metadataValue?: T;
-  /** true when the user has a local edit overriding metadata. */
+  /** the user's edit (EditValue); undefined when the field was never edited. */
+  editValue?: T;
+  /** true when the user has a local edit overriding metadata: EditValue is set (lists: AddValues/RemoveValues non-empty). */
   edited: boolean;
+  /** the album has an edit layer (HasEditLayer); this alone does not mean the field was edited. */
+  hasEditLayer: boolean;
 }
 
 export interface AlbumEditInfo {
@@ -693,10 +697,19 @@ function editField<T>(info: Record<string, unknown>, fieldSuffix: string, list =
   const rawMeta = member(wrapper, list ? '::MetadataValues' : '::MetadataValue');
   const value = (list ? decodeStringList(rawValue) : rawValue) as T | undefined;
   const metadataValue = (list ? decodeStringList(rawMeta) : rawMeta) as T | undefined;
-  return { value, metadataValue, edited: member(wrapper, '::HasEditLayer') === true };
+  const hasEditLayer = member(wrapper, '::HasEditLayer') === true;
+  if (list) {
+    // EditListInfo has no EditValue; user changes live in AddValues/RemoveValues.
+    const changed = [member(wrapper, '::AddValues'), member(wrapper, '::RemoveValues')]
+      .some((v) => (decodeStringList(v)?.length ?? 0) > 0);
+    return { value, metadataValue, edited: changed, hasEditLayer };
+  }
+  const rawEdit = member(wrapper, '::EditValue');
+  const editValue = (rawEdit === null ? undefined : rawEdit) as T | undefined;
+  return { value, metadataValue, editValue, edited: editValue !== undefined, hasEditLayer };
 }
 
-function parseAlbumEditInfo(decoded: Record<string, unknown>): AlbumEditInfo {
+export function parseAlbumEditInfo(decoded: Record<string, unknown>): AlbumEditInfo {
   return {
     title: editField<string>(decoded, 'Title'),
     version: editField<string>(decoded, 'Version'),
