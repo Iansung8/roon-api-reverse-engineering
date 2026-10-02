@@ -601,23 +601,34 @@ export class RoonClient {
 
   /** Build + send a single-album Library::Edit from pre-serialized AlbumEdit member fields. */
   private editAlbumStruct(albumId: bigint, fields: StructField[]): Promise<CallResult> {
-    const albumEdit = this.structArg(ALBUM_EDIT, [
+    return this.sendLibraryEdit([this.albumEditStruct(albumId, fields)], []);
+  }
+
+  /** One AlbumEdit: the AlbumId (AlbumLite::AlbumId) plus the Edit* members to change. */
+  private albumEditStruct(albumId: bigint, fields: StructField[]): Buffer {
+    return this.structArg(ALBUM_EDIT, [
       { name: `long ${ALBUM_EDIT}::AlbumId`, propType: PropertyType.Long, value: new BinaryWriter().long(albumId).toBuffer() },
       ...fields,
     ]);
-    // Albums: IList<AlbumEdit> as LengthPrefixed = int(len) + flexInt(count) + items.
-    const blob = new BinaryWriter().flexInt(1).bytes(albumEdit).toBuffer();
-    const libraryEdit = this.structArg(LIBRARY_EDIT, [
-      {
-        name: `System.Collections.Generic.IList<${ALBUM_EDIT}> ${LIBRARY_EDIT}::Albums`,
-        propType: PropertyType.LengthPrefixed,
-        value: new BinaryWriter().integer(blob.length).bytes(blob).toBuffer(),
-      },
-    ]);
+  }
+
+  /**
+   * Send one Library::Edit. LibraryEdit::Albums and ::Tracks are IList members whose wire form is
+   * LengthPrefixed: integer(len) + flexInt(count) + inline structs (confirmed against official-client captures).
+   */
+  private sendLibraryEdit(albums: Buffer[], tracks: Buffer[]): Promise<CallResult> {
+    const list = (items: Buffer[]) => {
+      const blob = new BinaryWriter().flexInt(items.length).bytes(Buffer.concat(items)).toBuffer();
+      return new BinaryWriter().integer(blob.length).bytes(blob).toBuffer();
+    };
+    const fields: StructField[] = [];
+    if (albums.length) fields.push({ name: `System.Collections.Generic.IList<${ALBUM_EDIT}> ${LIBRARY_EDIT}::Albums`, propType: PropertyType.LengthPrefixed, value: list(albums) });
+    if (tracks.length) fields.push({ name: `System.Collections.Generic.IList<${TRACK_EDIT}> ${LIBRARY_EDIT}::Tracks`, propType: PropertyType.LengthPrefixed, value: list(tracks) });
+    if (!fields.length) throw new Error('sendLibraryEdit: nothing to edit');
     return this.call(
       'Library', 'Edit',
       [{ type: 'LibraryEdit', name: 'edit' }, { type: 'ResultCallback', name: 'cb' }],
-      libraryEdit, this.serviceOid('Library'),
+      this.structArg(LIBRARY_EDIT, fields), this.serviceOid('Library'),
     );
   }
 }
@@ -641,6 +652,7 @@ const EDIT_OPTIONAL_VAL_INT = 'Sooloos.Broker.Api.EditOptionalVal<int>';
 const EDIT_REQUIRED_REF_STR = 'Sooloos.Broker.Api.EditRequiredRef<string>';
 const EDIT_LIST_STR = 'Sooloos.Broker.Api.EditList<string>';
 const LIBRARY_EDIT = 'Sooloos.Broker.Api.LibraryEdit';
+const TRACK_EDIT = 'Sooloos.Broker.Api.TrackEdit';
 
 // --- AlbumEditInfo decoding (by-value return) ---
 
