@@ -177,8 +177,13 @@ interface SchemaMember { name: string; propType: number; type: string }
 const schemaStructs: Record<string, { members: SchemaMember[] }> = { ...catalog.structs };
 // Only these closed generic wrappers have handwritten, live-validated encoders.
 // Instantiate their catalog templates rather than inventing member schemas.
+// The last four appear in official-client captures of Library::Edit (Roon 2.73 build 1696):
+// merge (TrackEdit.AlbumId/TrackNumber/MediaNumber), identify (MetadataAlbumId/MetadataTrackId)
+// and set primary version (AlbumEdit.DuplicateOf).
 for (const [template, arg, valuePropType] of [
   ['EditList', 'string', 20], ['EditRequiredRef', 'string', 20], ['EditOptionalVal', 'int', 0],
+  ['EditOptionalVal', 'long', 1], ['EditRequiredVal', 'long', 1], ['EditRequiredVal', 'int', 0],
+  ['EditOptionalRef', 'Sooloos.Broker.Api.AlbumLite', 23],
 ] as const) {
   const typeName = `Sooloos.Broker.Api.${template}<${arg}>`;
   schemaStructs[typeName] = { members: schemaStructs[`Sooloos.Broker.Api.${template}\`1`].members.map((m) => ({
@@ -187,10 +192,13 @@ for (const [template, arg, valuePropType] of [
     propType: m.type === 'T' ? valuePropType : m.type === 'T?' ? valuePropType + 10 : m.propType,
   })) };
 }
-// Catalog reflection uses Object for collections. These three overrides are
-// evidenced by docs/plans/2026-06-12-metadata-edit-findings.md; do not extrapolate.
+// Catalog reflection uses Object for collections. LibraryEdit::Albums and the EditList values
+// are evidenced by docs/plans/2026-06-12-metadata-edit-findings.md; LibraryEdit::Tracks by
+// official-client captures of merge and identify edits that carried non-empty track lists
+// (Roon 2.73 build 1696). Do not extrapolate to the other LibraryEdit lists.
 const lengthPrefixedMembers = new Set([
   'Sooloos.Broker.Api.LibraryEdit::Albums',
+  'Sooloos.Broker.Api.LibraryEdit::Tracks',
   'Sooloos.Broker.Api.EditList<string>::AddValues',
   'Sooloos.Broker.Api.EditList<string>::RemoveValues',
 ]);

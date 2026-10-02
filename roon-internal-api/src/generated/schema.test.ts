@@ -20,6 +20,12 @@ test('compiled schemas use complete wire names and explicit captured collection 
     'int Sooloos.Broker.Api.SearchParameters::RequestTimeoutInMs',
   ]);
   expect(structSchema('Sooloos.Broker.Api.LibraryEdit')?.find((m) => m.shortName === 'Albums')?.propType).toBe(24);
+  expect(structSchema('Sooloos.Broker.Api.LibraryEdit')?.find((m) => m.shortName === 'Tracks')?.propType).toBe(24);
+  expect(structSchema('Sooloos.Broker.Api.LibraryEdit')?.find((m) => m.shortName === 'Performers')?.propType).toBe(23);
+  expect(structSchema('Sooloos.Broker.Api.EditRequiredVal<long>')?.find((m) => m.shortName === 'EditValue')?.propType).toBe(11);
+  expect(structSchema('Sooloos.Broker.Api.EditRequiredVal<int>')?.find((m) => m.shortName === 'EditValue')?.propType).toBe(10);
+  expect(structSchema('Sooloos.Broker.Api.EditOptionalVal<long>')?.find((m) => m.shortName === 'EditValue')?.propType).toBe(11);
+  expect(structSchema('Sooloos.Broker.Api.EditOptionalRef<Sooloos.Broker.Api.AlbumLite>')?.find((m) => m.shortName === 'EditValue')?.propType).toBe(23);
   expect(structSchema('Sooloos.Broker.Api.EditList<string>')?.find((m) => m.shortName === 'AddValues')?.propType).toBe(24);
   expect(structSchema('Sooloos.Broker.Api.EditRequiredRef<string>')?.find((m) => m.shortName === 'EditValue')?.propType).toBe(20);
   expect(structSchema('Sooloos.Broker.Api.EditOptionalVal<int>')?.find((m) => m.shortName === 'EditValue')?.propType).toBe(10);
