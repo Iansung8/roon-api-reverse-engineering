@@ -54,6 +54,7 @@ reports it.
 | set primary | switched a release back to the local copy; `DuplicateOf` read back as sent |
 | merge into a new album | two 3-track albums became one 6-track album numbered 1–6 |
 | merge into an existing album | 6 split-off tracks joined a 57-track album: 63 tracks numbered 1–63 |
+| two-disc merge | a 2-CD live album split into one album per disc became one album with discs 1–2 (10 + 14 tracks); Roon identified it automatically |
 | identify | 4 editions returned for a 63-track album; the chosen edition's 63 tracks paired with the 63 files by position, as Roon's own identification did; the title and every `MetadataTrackId` applied |
 | clear track edits | stale track-number edits removed; album membership unchanged |
 
@@ -69,4 +70,3 @@ reports it.
 
 - `LibraryEdit::Performers` (seen only empty), `::Works`, `::Performances` and `::Genres`:
   framing unconfirmed.
-- Merges into disc numbers above 1 have not been run live.

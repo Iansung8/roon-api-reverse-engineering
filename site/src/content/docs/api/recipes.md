@@ -118,7 +118,6 @@ await roon.setPrimaryVersion(primaryAlbumId, [otherAlbumId]);
   desktop client does, and the Core creates the album.
 - Roon re-attaches an old track's edits to a new file with identical audio, so re-imported
   files can land in an album from an earlier merge. Move them with another `mergeTracks`.
-- Merges into disc numbers above 1 have not been run against a live Core yet.
 
 :::danger[clearTrackEdits]
 `roon.clearTrackEdits(trackIds)` sends `ClearMetadataEdits`: it removes the user's edits on
