@@ -66,6 +66,9 @@ await roon.editAlbum(albumId, {
   genres: ['Jazz'],
   labels: ['Columbia'],
 });
+
+// drop the title edit again (sends Title.ClearEdits)
+await roon.editAlbum(albumId, { clearTitle: true });
 ```
 
 In the edit info, `edited` means the user changed that field: `editValue` is set, or for

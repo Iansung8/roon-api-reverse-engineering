@@ -548,9 +548,11 @@ export class RoonClient {
    */
   editAlbum(albumId: bigint, edits: AlbumEdits): Promise<CallResult> {
     const fields: StructField[] = [];
-    if (edits.title !== undefined) {
-      const w = this.structArg(EDIT_REQUIRED_REF_STR, [
-        { name: `string ${EDIT_REQUIRED_REF_STR}::EditValue`, propType: PropertyType.String, value: new BinaryWriter().string(edits.title).toBuffer() },
+    if (edits.title !== undefined && edits.clearTitle) throw new Error('editAlbum: title and clearTitle are exclusive');
+    if (edits.title !== undefined || edits.clearTitle) {
+      const w = this.structArg(EDIT_REQUIRED_REF_STR, [edits.clearTitle
+        ? { name: `bool ${EDIT_REQUIRED_REF_STR}::ClearEdits`, propType: PropertyType.Bool, value: new BinaryWriter().boolean(true).toBuffer() }
+        : { name: `string ${EDIT_REQUIRED_REF_STR}::EditValue`, propType: PropertyType.String, value: new BinaryWriter().string(edits.title!).toBuffer() },
       ]);
       fields.push({ name: `${EDIT_REQUIRED_REF_STR} ${ALBUM_EDIT}::Title`, propType: PropertyType.Object, value: w });
     }
@@ -623,6 +625,8 @@ export class RoonClient {
 /** Reversible album metadata edits (see RoonClient.editAlbum). */
 export interface AlbumEdits {
   title?: string;
+  /** Send Title.ClearEdits to drop the user's title edit and restore the original. Exclusive with `title`. */
+  clearTitle?: boolean;
   rating?: number;
   addGenres?: string[];
   removeGenres?: string[];

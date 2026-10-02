@@ -613,4 +613,17 @@ describe('album edit info', () => {
     expect(edited.title).toMatchObject({ value: 'B', editValue: 'B', edited: true });
     expect(edited.genres.edited).toBe(true);
   });
+
+  test('clearTitle sends Title.ClearEdits instead of an EditValue', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const pending = c.editAlbum(17n, { clearTitle: true });
+    const decoded = latestAlbumEdit(t);
+    await completeLatestCall(t, pending);
+    expect(decoded.memberName).toContain('::Title');
+    const w = inlineValue(decoded.value);
+    expect(declaredTypes(t).get(w.typeId)!.members[w.body.flexInt() - 1].name).toContain('::ClearEdits');
+    expect(w.body.boolean()).toBe(true);
+    expect(() => c.editAlbum(17n, { title: 'x', clearTitle: true })).toThrow();
+  });
 });
