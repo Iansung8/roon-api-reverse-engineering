@@ -19,10 +19,10 @@ export { BinaryReader } from './proto/reader';
 export { writeFlexInt, readFlexInt, writeFlexLong, readFlexLong } from './proto/flex';
 
 // Argument serialization.
-export { Arg, buildArgs, inlineStruct } from './proto/serializer';
+export { Arg, buildArgs, inlineStruct, encodeStringDictList, decodeStringTupleList } from './proto/serializer';
 
 // Object graph (response deserialization).
-export { ObjectGraph, PropertyType, RoonObject, ObjRef, isRef, TypeDef, TypeMember } from './proto/objects';
+export { ObjectGraph, PropertyType, RoonObject, ObjRef, isRef, TypeDef, TypeMember, decodeRefList } from './proto/objects';
 
 // Catalog + signatures (the full method/type map lives in catalog.authoritative.json).
 export { formatMethodSignature, formatType, CatalogParam } from './catalog/signature';

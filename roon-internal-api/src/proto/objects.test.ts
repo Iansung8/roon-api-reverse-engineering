@@ -1,4 +1,4 @@
-import { ObjectGraph, PropertyType, isRef } from './objects';
+import { ObjectGraph, PropertyType, decodeRefList, isRef } from './objects';
 import { encodeRequest, FrameParser } from './frame';
 import { BinaryWriter } from './writer';
 import { writeFlexInt } from './flex';
@@ -226,5 +226,14 @@ describe('IList return values', () => {
     expect(() => graphWithItemType().decodeListReturnValue(payload.subarray(0, payload.length - 1))).toThrow();
     const padded = Buffer.concat([new BinaryWriter().flexInt(payload.length).toBuffer(), payload.subarray(1), Buffer.from([0])]);
     expect(() => graphWithItemType().decodeListReturnValue(padded)).toThrow();
+  });
+});
+
+describe('reference lists inside inline structs', () => {
+  test('decodeRefList decodes flexInt(count) + flexLong references', () => {
+    const raw = new BinaryWriter().flexInt(2).long(1579807).long(5).toBuffer();
+    expect(decodeRefList(raw)).toEqual([{ $ref: 1579807n }, { $ref: 5n }]);
+    expect(decodeRefList([{ $ref: 1n }, 'x'])).toEqual([{ $ref: 1n }]);
+    expect(() => decodeRefList(Buffer.concat([raw, Buffer.from([0])]))).toThrow();
   });
 });

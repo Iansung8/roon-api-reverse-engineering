@@ -37,6 +37,21 @@ export function isRef(v: unknown): v is ObjRef {
   return typeof v === 'object' && v !== null && '$ref' in (v as object);
 }
 
+/**
+ * An IList<object> member inside an inline struct arrives as raw bytes (the LengthPrefixed body):
+ * flexInt(count) + one flexLong object reference per item, e.g. MetadataSearchResult.Albums.
+ */
+export function decodeRefList(v: unknown): ObjRef[] {
+  if (Array.isArray(v)) return v.filter(isRef);
+  if (!(v instanceof Uint8Array)) return [];
+  const r = new BinaryReader(v);
+  const count = r.flexInt();
+  const refs: ObjRef[] = [];
+  for (let i = 0; i < count; i++) refs.push({ $ref: r.flexLong() });
+  if (r.remaining !== 0) throw new Error(`${r.remaining} bytes left after decoding ${count} refs`);
+  return refs;
+}
+
 /** Collection types supported by the object stream decoder. */
 export function isCollectionType(typeName: string): boolean {
   return /(^|\.)(DataList|Query|VirtualQuery)</.test(typeName) || /\.Query$/.test(typeName);

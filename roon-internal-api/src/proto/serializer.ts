@@ -101,6 +101,40 @@ export function serializeStructValue(propType: number, v: unknown): Buffer {
 }
 
 /**
+ * IEnumerable<IDictionary<string, string>> argument (the file tags of Metadata::GetMatchingEditions):
+ * flexInt(totalLen) + flexInt(count) + per dictionary [flexInt(len) + flexInt(pairs) + (string, string)...]. Matches an official-client capture.
+ */
+export function encodeStringDictList(dicts: [string, string][][]): Buffer {
+  const inner = new BinaryWriter().flexInt(dicts.length);
+  for (const pairs of dicts) {
+    const w = new BinaryWriter().flexInt(pairs.length);
+    for (const [k, v] of pairs) w.string(k).string(v);
+    const body = w.toBuffer();
+    inner.flexInt(body.length).bytes(body);
+  }
+  const all = inner.toBuffer();
+  return new BinaryWriter().flexInt(all.length).bytes(all).toBuffer();
+}
+
+/** IList<Tuple<string, string>> raw bytes (e.g. TrackExportInfo.FileTags): flexInt(count) + per item [flexInt(len) + string + string]. */
+export function decodeStringTupleList(raw: Uint8Array): [string, string][] {
+  const b = Buffer.from(raw);
+  let pos = 0;
+  const flex = () => { let n = 0; for (;;) { const x = b[pos++]; n = (n << 7) | (x & 0x7f); if (!(x & 0x80)) return n; } };
+  const str = () => { const len = flex(); const s = b.subarray(pos, pos + len).toString('utf8'); pos += len; return s; };
+  const count = flex();
+  const out: [string, string][] = [];
+  for (let i = 0; i < count; i++) {
+    const len = flex();
+    const end = pos + len;
+    out.push([str(), str()]);
+    if (pos !== end) throw new Error(`tuple ${i} length mismatch`);
+  }
+  if (pos !== b.length) throw new Error(`${b.length - pos} bytes left after tuples`);
+  return out;
+}
+
+/**
  * Encode a by-value struct argument as an inline value object:
  *   flexLong(1) + flexInt(typeId) + flexInt(len) + <sparse fields>
  * where fields = (flexInt(memberIndex) + valueBytes)* then flexInt(0).

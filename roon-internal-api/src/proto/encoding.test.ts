@@ -1,4 +1,4 @@
-import { serializeStructValue, inlineStruct, Arg, buildArgs } from './serializer';
+import { serializeStructValue, inlineStruct, Arg, buildArgs, encodeStringDictList, decodeStringTupleList } from './serializer';
 import { BinaryWriter } from './writer';
 import { BinaryReader } from './reader';
 
@@ -174,5 +174,21 @@ describe('legacy reference-list encoding', () => {
     ]);
 
     expect(args).toEqual(expected);
+  });
+});
+
+describe('file-tag dictionaries (Metadata::GetMatchingEditions)', () => {
+  test('encodeStringDictList frames each dictionary as len + pair count + strings', () => {
+    const bytes = encodeStringDictList([[['TITLE', 'a'], ['ARTIST', 'b']]]);
+    // 0x14 total length, 1 dictionary, 0x12 dictionary length, 2 pairs, then length-prefixed strings
+    expect(bytes.toString('hex')).toBe('14011202055449544c450161064152544953540162');
+    expect(encodeStringDictList([]).toString('hex')).toBe('0100');
+  });
+
+  test('decodeStringTupleList decodes FileTags, including repeated keys', () => {
+    const tuple = (k: string, v: string) => { const b = new BinaryWriter().string(k).string(v).toBuffer(); return new BinaryWriter().flexInt(b.length).bytes(b).toBuffer(); };
+    const raw = Buffer.concat([new BinaryWriter().flexInt(3).toBuffer(), tuple('TITLE', 'A'), tuple('COMPOSER', 'X'), tuple('COMPOSER', 'Y')]);
+    expect(decodeStringTupleList(raw)).toEqual([['TITLE', 'A'], ['COMPOSER', 'X'], ['COMPOSER', 'Y']]);
+    expect(() => decodeStringTupleList(Buffer.concat([raw, Buffer.from([0])]))).toThrow();
   });
 });
