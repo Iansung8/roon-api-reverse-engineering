@@ -751,6 +751,7 @@ describe('structural Library::Edit operations', () => {
       switch (propType) {
         case PropertyType.Long: return r.long();
         case PropertyType.Bool: return r.boolean();
+        case PropertyType.String: return r.string();
         case PropertyType.NullableInt: return r.optionalInteger();
         case PropertyType.NullableLong: return r.optionalLong();
         case PropertyType.NullableBool: return r.optionalBoolean();
@@ -801,6 +802,17 @@ describe('structural Library::Edit operations', () => {
       { TrackId: 1100001n, ClearMetadataEdits: true },
       { TrackId: 1100002n, ClearMetadataEdits: true },
     ]);
+  });
+
+  test('editTrackTitles sets or clears TrackEdit.Title', async () => {
+    const { c, t } = buildClient();
+    seedCore(c);
+    const p = c.editTrackTitles([{ trackId: 1100001n, title: 'New title' }, { trackId: 1100002n, clearTitle: true }]);
+    await completeLatestCall(t, p);
+    const tracks = sentLibraryEdit(t).Tracks;
+    expect(tracks[0]).toMatchObject({ TrackId: 1100001n, Title: { EditValue: 'New title' } });
+    expect(tracks[1]).toMatchObject({ TrackId: 1100002n, Title: { ClearEdits: true } });
+    expect(() => c.editTrackTitles([{ trackId: 1n }])).toThrow();
   });
 
   test('identifyAlbum sets MetadataAlbumId and each MetadataTrackId', async () => {

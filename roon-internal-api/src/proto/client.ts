@@ -804,6 +804,21 @@ export class RoonClient {
       { name: `bool ${TRACK_EDIT}::ClearMetadataEdits`, propType: PropertyType.Bool, value: new BinaryWriter().boolean(true).toBuffer() },
     ])));
   }
+
+  /**
+   * Set or clear track titles (TrackEdit.Title). TrackEdit::Title has the same
+   * EditRequiredRef<string> shape as AlbumEdit::Title, so the wrapper is the one
+   * editAlbum uses. Only tracks in the library can be edited.
+   */
+  editTrackTitles(tracks: { trackId: bigint; title?: string; clearTitle?: boolean }[]): Promise<CallResult> {
+    const R = EDIT_REQUIRED_REF_STR;
+    return this.sendLibraryEdit([], tracks.map((t) => {
+      if ((t.title === undefined) === !t.clearTitle) throw new Error('editTrackTitles: give exactly one of title or clearTitle');
+      return this.trackEditStruct(t.trackId, [this.editWrapper(TRACK_EDIT, 'Title', R, [t.clearTitle
+        ? { name: `bool ${R}::ClearEdits`, propType: PropertyType.Bool, value: new BinaryWriter().boolean(true).toBuffer() }
+        : { name: `string ${R}::EditValue`, propType: PropertyType.String, value: new BinaryWriter().string(t.title!).toBuffer() }])]);
+    }));
+  }
 }
 
 /** One track of a release edition, as returned by RoonClient.getMatchingEditions. */
