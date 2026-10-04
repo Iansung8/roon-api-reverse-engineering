@@ -72,6 +72,19 @@ describe('ObjectGraph generic deserializer', () => {
     expect(f['Sooloos.Broker.Api.TrackLite::IsFavorite']).toBe(true);
   });
 
+  test('UPDATEOBJ replaces fields, so a member back at its default is cleared', () => {
+    const g = new ObjectGraph();
+    const T = 'Sooloos.Broker.Api.Endpoint';
+    feed(g, defType(41, T, [[`double ${T}::VolumeDouble`, PropertyType.Double], [`string ${T}::Name`, PropertyType.String]]));
+    feed(g, pushObj(900, 41, [[1, new BinaryWriter().double(-30).toBuffer()], [2, new BinaryWriter().string('USB').toBuffer()]]));
+    expect(g.getObject(900n)!.fields[`double ${T}::VolumeDouble`]).toBe(-30);
+    const update = pushObj(900, 41, [[2, new BinaryWriter().string('USB').toBuffer()]]);
+    update[0] = 5; // same body as UPDATEOBJ
+    feed(g, update);
+    expect(g.getObject(900n)!.fields[`double ${T}::VolumeDouble`]).toBeUndefined();
+    expect(g.getObject(900n)!.fields[`string ${T}::Name`]).toBe('USB');
+  });
+
   test('findByType locates a service object by short name', () => {
     const g = new ObjectGraph();
     feed(g, defType(1, 'Sooloos.Broker.Api.Library', []), pushObj(46, 1, []));

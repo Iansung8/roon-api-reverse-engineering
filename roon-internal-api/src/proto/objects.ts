@@ -161,7 +161,13 @@ export class ObjectGraph {
     const existing = this.objects.get(key);
     if (existing) {
       // PUSHSTUB adds a reference; it does not erase an already loaded object.
-      if (populate) Object.assign(existing.fields, fields);
+      // PUSHOBJ/UPDATEOBJ carry the whole object, and the sparse encoding omits
+      // default values, so replace the fields instead of merging: a member that
+      // went back to 0/false must not keep its old value.
+      if (populate && def) {
+        for (const k of Object.keys(existing.fields)) delete existing.fields[k];
+        Object.assign(existing.fields, fields);
+      } else if (populate) Object.assign(existing.fields, fields);
     } else {
       this.objects.set(key, { oid, typeId, typeName, fields });
     }
